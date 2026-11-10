@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Slide Charts</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="./taskpane.css" />
+</head>
+<body>
+  <header>
+    <h1>Slide Charts</h1>
+    <span class="tag">Pilot</span>
+  </header>
+
+  <div id="not-office" class="notice" hidden>
+    Open this inside PowerPoint. Below is a preview of the sample chart the pilot draws.
+  </div>
+
+  <section>
+    <h2>1 · Run the pilot checks</h2>
+    <p>Adds a test slide at the end of this presentation and checks everything the full product relies on (about 10 seconds).</p>
+    <button id="run" class="primary">Run pilot checks</button>
+    <ul id="results"></ul>
+  </section>
+
+  <section>
+    <h2>2 · Edit round-trip</h2>
+    <p>On the test slide, <b>resize or move the chart</b>, keep it selected, then click below. It should redraw with new numbers, filling the new size.</p>
+    <button id="redraw">Redraw selected chart with new data</button>
+    <button id="insert" class="secondary">Insert sample chart on current slide</button>
+    <p id="selection" class="muted">Selection: –</p>
+  </section>
+
+  <section>
+    <h2>3 · Send me the report</h2>
+    <p>Copy the report and paste it into our Claude conversation, with a screenshot of the test slide.</p>
+    <button id="copy">Copy report</button>
+    <textarea id="report" readonly rows="8" spellcheck="false"></textarea>
+  </section>
+
+  <div id="preview"></div>
+  <footer class="muted" id="version"></footer>
+
+  <script type="module" src="./taskpane.ts"></script>
+</body>
+</html>
