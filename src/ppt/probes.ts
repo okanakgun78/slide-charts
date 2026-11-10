@@ -5,7 +5,9 @@
 import { DEFAULT_PALETTE, normHex } from "../engine/format";
 import { canvasMeasure } from "../engine/measure";
 import type { Frame, StackedSpec, Style } from "../engine/types";
-import { addPrim, drawChart, readThemeAccents, TAG } from "./render";
+import {
+  addPrim, drawChart, errText, LINE_EPS, readChart, readThemeAccents, redrawChart, shapeExists, TAG,
+} from "./render";
 
 export interface ProbeResult {
   id: string;
@@ -45,6 +47,21 @@ export function chartStyle(palette: string[]): Style {
 
 export const FALLBACK_FONTS = '"Aptos", "Calibri", "Helvetica Neue", Arial, sans-serif';
 
+export function measureFor(pc: Pick<PilotContext, "fontName" | "measureRatio"> | undefined) {
+  return canvasMeasure(`"${pc?.fontName ?? "Aptos"}", ${FALLBACK_FONTS}`, pc?.measureRatio ?? 1);
+}
+
+/** New numbers: each value moves by up to ±25%, rounded like the input. */
+export function perturb(spec: StackedSpec): StackedSpec {
+  return {
+    ...spec,
+    series: spec.series.map((s) => ({
+      ...s,
+      values: s.values.map((v) => (v === null ? null : Math.max(1, Math.round(v * (0.75 + Math.random() * 0.5))))),
+    })),
+  };
+}
+
 const API_SETS = ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"];
 
 type Probe = (pc: PilotContext) => Promise<Omit<ProbeResult, "id" | "name">>;
@@ -55,13 +72,36 @@ async function timed(id: string, name: string, pc: PilotContext, fn: Probe): Pro
     const r = await fn(pc);
     return { id, name, ...r, ms: Math.round(performance.now() - t0) };
   } catch (e) {
-    const err = e as { code?: string; message?: string; debugInfo?: { errorLocation?: string } };
-    const where = err.debugInfo?.errorLocation ? ` @ ${err.debugInfo.errorLocation}` : "";
-    return { id, name, ok: false, detail: `${err.code ?? "Error"}: ${err.message ?? String(e)}${where}`, ms: Math.round(performance.now() - t0) };
+    return { id, name, ok: false, detail: errText(e), ms: Math.round(performance.now() - t0) };
   }
 }
 
 const run = <T>(fn: (ctx: PowerPoint.RequestContext) => Promise<T>) => PowerPoint.run(fn);
+const r1 = (v: number) => Math.round(v * 100) / 100;
+
+/** Adds a small labelled caption next to a visual probe. */
+function caption(slide: PowerPoint.Slide, text: string, left: number, top: number, width = 230) {
+  const t = slide.shapes.addTextBox(text, { left, top, width, height: 16 });
+  t.textFrame.textRange.font.size = 9;
+  t.textFrame.textRange.font.color = "#404040";
+  t.textFrame.wordWrap = true;
+  return t;
+}
+
+/** Two small rectangles grouped together; returns the group id. */
+async function makeTestGroup(slideId: string, left: number, top: number): Promise<string> {
+  return run(async (ctx) => {
+    const shapes = ctx.presentation.slides.getItem(slideId).shapes;
+    const a = shapes.addGeometricShape("Rectangle", { left, top, width: 8, height: 8 });
+    const b = shapes.addGeometricShape("Rectangle", { left: left + 10, top, width: 8, height: 8 });
+    a.load("id"); b.load("id");
+    await ctx.sync();
+    const g = shapes.addGroup([a.id, b.id]);
+    g.load("id");
+    await ctx.sync();
+    return g.id;
+  });
+}
 
 const probes: [string, string, Probe][] = [
   ["env", "Environment and API versions", async () => {
@@ -71,21 +111,29 @@ const probes: [string, string, Probe][] = [
     return { ok, detail: `${d.host} ${d.platform} ${d.version} | ${sets.join(" ")}` };
   }],
 
-  ["slide", "Add a test slide and go to it", async (pc) => run(async (ctx) => {
-    let layoutId: string | undefined;
+  ["slide", "Add a clean test slide and go to it", async (pc) => run(async (ctx) => {
     const master = ctx.presentation.slideMasters.getItemAt(0);
     master.layouts.load("items/id,items/name");
     await ctx.sync();
-    const blank = master.layouts.items.find((l) => /blank|leer|vide/i.test(l.name));
-    if (blank) layoutId = blank.id;
-    ctx.presentation.slides.add(layoutId ? { layoutId } : undefined);
+    const counts = master.layouts.items.map((l) => l.shapes.getCount());
+    await ctx.sync();
+    const ranked = master.layouts.items
+      .map((l, k) => ({ l, n: counts[k].value, pref: /blank|leer|vide|empty/i.test(l.name) ? 0 : /title only/i.test(l.name) ? 1 : 2 }))
+      .sort((a, b) => a.pref - b.pref || a.n - b.n);
+    const layout = ranked[0]?.l;
+    ctx.presentation.slides.add(layout ? { layoutId: layout.id } : undefined);
     ctx.presentation.slides.load("items/id");
     await ctx.sync();
     const slide = ctx.presentation.slides.items[ctx.presentation.slides.items.length - 1];
     pc.slideId = slide.id;
+    // Remove the layout's placeholders so the test slide is empty.
+    slide.shapes.load("items/id");
+    await ctx.sync();
+    const removed = slide.shapes.items.length;
+    slide.shapes.items.forEach((s) => s.delete());
     ctx.presentation.setSelectedSlides([slide.id]);
     await ctx.sync();
-    return { ok: true, detail: `slide ${slide.id}; layout: ${blank ? blank.name : "default (no Blank layout found)"}` };
+    return { ok: true, detail: `slide ${slide.id}; layout "${layout?.name ?? "default"}" (${ranked[0]?.n ?? "?"} layout shapes); removed ${removed} placeholders` };
   })],
 
   ["page", "Read slide size", async (pc) => run(async (ctx) => {
@@ -97,13 +145,12 @@ const probes: [string, string, Probe][] = [
     return { ok: true, detail: `${ps.slideWidth} x ${ps.slideHeight} pt` };
   })],
 
-  ["theme", "Read template theme colours", async (pc) => run(async (ctx) => {
-    const slide = ctx.presentation.slides.getItem(pc.slideId!);
-    const raw = await readThemeAccents(ctx, slide);
+  ["theme", "Read template theme colours", async (pc) => {
+    const raw = await readThemeAccents(pc.slideId!);
     const hex = raw.map(normHex);
     if (hex.every((h) => h)) pc.palette = hex as string[];
     return { ok: hex.every((h) => h), detail: `accents raw=${JSON.stringify(raw)}` };
-  })],
+  }],
 
   ["autosize", "Measure text (PowerPoint vs task pane)", async (pc) => run(async (ctx) => {
     const slide = ctx.presentation.slides.getItem(pc.slideId!);
@@ -120,8 +167,8 @@ const probes: [string, string, Probe][] = [
     await ctx.sync();
     boxes.forEach((s) => { s.load("width,height"); s.textFrame.textRange.font.load("name"); });
     await ctx.sync();
-    const font = boxes[0].textFrame.textRange.font.name;
-    pc.fontName = font ?? undefined;
+    const font = boxes[0].textFrame.textRange.font.name ?? undefined;
+    pc.fontName = font;
     const m = canvasMeasure(`"${font}", ${FALLBACK_FONTS}`);
     const fontVisible = document.fonts ? document.fonts.check(`12px "${font}"`) : false;
     const rows = samples.map((t, k) => ({ t, ppt: boxes[k].width, canvas: m(t, 12) }));
@@ -132,35 +179,43 @@ const probes: [string, string, Probe][] = [
     await ctx.sync();
     return {
       ok: autosized,
-      detail: `font="${font}" visibleToPane=${fontVisible} autosizeReadBack=${autosized} ` +
+      detail: `font="${font}" visibleToPane=${fontVisible} ratio=${pc.measureRatio?.toFixed(3)} ` +
         rows.map((r) => `[${r.t}: ppt=${r.ppt.toFixed(1)} canvas=${r.canvas.toFixed(1)}]`).join(" "),
     };
   })],
 
-  ["chart", "Draw sample stacked chart (timed)", async (pc) => run(async (ctx) => {
-    const slide = ctx.presentation.slides.getItem(pc.slideId!);
+  ["lines", "Flat lines keep zero height", async (pc) => run(async (ctx) => {
+    const shapes = ctx.presentation.slides.getItem(pc.slideId!).shapes;
+    const y = pc.slideH * 0.9;
+    const a = shapes.addLine("Straight", { left: 20, top: y, width: 100, height: 0 });
+    const b = shapes.addLine("Straight", { left: 140, top: y, width: 100, height: LINE_EPS });
+    const c = shapes.addLine("Straight", { left: 260, top: y, width: 100, height: 1 });
+    c.height = 0;
+    [a, b, c].forEach((s) => s.load("height,width"));
+    await ctx.sync();
+    const detail = `opts h=0 -> ${r1(a.height)}; opts h=${LINE_EPS} -> ${r1(b.height)}; set h=0 after -> ${r1(c.height)}`;
+    [a, b, c].forEach((s) => s.delete());
+    await ctx.sync();
+    return { ok: b.height < 0.5, detail };
+  })],
+
+  ["chart", "Draw sample stacked chart (timed)", async (pc) => {
     const frame: Frame = { left: pc.slideW * 0.06, top: pc.slideH * 0.12, width: pc.slideW * 0.58, height: pc.slideH * 0.62 };
-    const m = canvasMeasure(`"${pc.fontName ?? "Aptos"}", ${FALLBACK_FONTS}`, pc.measureRatio ?? 1);
-    const r = await drawChart(ctx, slide, SAMPLE_SPEC, frame, chartStyle(pc.palette), m);
+    const r = await drawChart(pc.slideId!, SAMPLE_SPEC, frame, chartStyle(pc.palette), measureFor(pc));
     pc.chartGroupId = r.groupId;
     return {
       ok: true,
-      detail: `${r.shapeCount} shapes; draw ${Math.round(r.msShapes)} ms, group+tag ${Math.round(r.msGroupTag)} ms` +
-        (r.warnings.length ? `; warnings: ${r.warnings.join(", ")}` : ""),
+      detail: `${r.shapeCount} shapes; draw ${Math.round(r.msShapes)} ms, group+tag ${Math.round(r.msGroupTag)} ms; ` +
+        `frame h=${r1(frame.height)} drawn h=${r1(r.drawn.height)}` + (r.warnings.length ? `; warnings: ${r.warnings.join(", ")}` : ""),
     };
-  })],
+  }],
 
-  ["tag", "Read chart data back from the file", async (pc) => run(async (ctx) => {
-    const g = ctx.presentation.slides.getItem(pc.slideId!).shapes.getItem(pc.chartGroupId!);
-    const tag = g.tags.getItemOrNullObject(TAG);
-    tag.load("value");
-    g.load("type");
-    await ctx.sync();
-    if (tag.isNullObject) return { ok: false, detail: "tag missing" };
-    const back = JSON.parse(tag.value);
-    const ok = JSON.stringify(back.spec) === JSON.stringify(SAMPLE_SPEC);
-    return { ok, detail: `type=${g.type}; ${tag.value.length} chars; spec round-trip ${ok ? "identical" : "DIFFERENT"}` };
-  })],
+  ["tag", "Read chart data back from the file", async (pc) => {
+    const ref = await readChart(pc.slideId!, pc.chartGroupId!);
+    if (!ref) return { ok: false, detail: "tag missing" };
+    const ok = JSON.stringify(ref.stored.spec) === JSON.stringify(SAMPLE_SPEC);
+    return { ok, detail: `spec round-trip ${ok ? "identical" : "DIFFERENT"}` };
+  }],
 
   ["bigtag", "Store a large data payload (60 KB)", async (pc) => run(async (ctx) => {
     const g = ctx.presentation.slides.getItem(pc.slideId!).shapes.getItem(pc.chartGroupId!);
@@ -176,9 +231,82 @@ const probes: [string, string, Probe][] = [
     return { ok: len === big.length, detail: `wrote ${big.length}, read ${len}` };
   })],
 
+  ["delete", "Ways to delete a group", async (pc) => {
+    const out: string[] = [];
+    let anyOk = false;
+    const variants: [string, (ctx: PowerPoint.RequestContext, shapes: PowerPoint.ShapeCollection, gid: string) => Promise<void>][] = [
+      ["by-id", async (ctx, shapes, gid) => { shapes.getItem(gid).delete(); await ctx.sync(); }],
+      ["children", async (ctx, shapes, gid) => {
+        const kids = shapes.getItem(gid).group.shapes;
+        kids.load("items/id");
+        await ctx.sync();
+        kids.items.forEach((k) => k.delete());
+        await ctx.sync();
+      }],
+      ["ungroup", async (ctx, shapes, gid) => {
+        const g = shapes.getItem(gid);
+        const kids = g.group.shapes;
+        kids.load("items/id");
+        await ctx.sync();
+        const ids = kids.items.map((k) => k.id);
+        g.group.ungroup();
+        await ctx.sync();
+        ids.forEach((id) => shapes.getItemOrNullObject(id).delete());
+        await ctx.sync();
+      }],
+    ];
+    for (let k = 0; k < variants.length; k++) {
+      const [name, fn] = variants[k];
+      let gid = "";
+      try {
+        gid = await makeTestGroup(pc.slideId!, 20 + k * 30, pc.slideH * 0.95);
+        await run((ctx) => fn(ctx, ctx.presentation.slides.getItem(pc.slideId!).shapes, gid));
+        const gone = !(await shapeExists(pc.slideId!, gid));
+        anyOk ||= gone;
+        out.push(`${name}: ${gone ? "removed" : "still present"}`);
+      } catch (e) {
+        const gone = gid ? !(await shapeExists(pc.slideId!, gid).catch(() => false)) : false;
+        anyOk ||= gone;
+        out.push(`${name}: ${errText(e)}${gone ? " (but removed)" : ""}`);
+      }
+    }
+    return { ok: anyOk, detail: out.join(" | ") };
+  }],
+
+  ["roundtrip", "Resize chart, then redraw with new data", async (pc) => {
+    // Simulate the user resizing the chart: shrink and move the group via the API.
+    let resizeNote = "";
+    try {
+      await run(async (ctx) => {
+        const g = ctx.presentation.slides.getItem(pc.slideId!).shapes.getItem(pc.chartGroupId!);
+        g.load("left,width,height");
+        await ctx.sync();
+        g.width = g.width * 0.85;
+        g.height = g.height * 0.9;
+        g.left = g.left + 10;
+        await ctx.sync();
+      });
+      resizeNote = "resized via API";
+    } catch (e) {
+      resizeNote = `resize failed: ${errText(e)}`;
+    }
+    const ref = await readChart(pc.slideId!, pc.chartGroupId!);
+    if (!ref) return { ok: false, detail: `${resizeNote}; chart not found` };
+    const r = await redrawChart(ref, perturb(SAMPLE_SPEC), chartStyle(pc.palette), measureFor(pc));
+    const oldGone = !(await shapeExists(pc.slideId!, pc.chartGroupId!));
+    const back = await readChart(pc.slideId!, r.groupId);
+    pc.chartGroupId = r.groupId;
+    const ok = oldGone && !!back;
+    return {
+      ok,
+      detail: `${resizeNote}; moved=${r.moved} resized=${r.resized}; delete=${r.deleteStrategy}; ` +
+        `old removed=${oldGone}; new tagged=${!!back}; new frame w=${r1(r.frame.width)} h=${r1(r.frame.height)}; ${r.log.join(" | ")}`,
+    };
+  }],
+
   ["harvey", "Harvey ball via shape adjustments (75%)", async (pc) => run(async (ctx) => {
     const slide = ctx.presentation.slides.getItem(pc.slideId!);
-    const x = pc.slideW * 0.72, y = pc.slideH * 0.14, d = 28;
+    const x = pc.slideW * 0.72, y = pc.slideH * 0.12, d = 28;
     const ring = slide.shapes.addGeometricShape("Ellipse", { left: x, top: y, width: d, height: d });
     ring.fill.setSolidColor("#FFFFFF");
     ring.lineFormat.color = pc.palette[0];
@@ -186,29 +314,19 @@ const probes: [string, string, Probe][] = [
     const pie = slide.shapes.addGeometricShape("Pie", { left: x, top: y, width: d, height: d });
     pie.fill.setSolidColor(pc.palette[0]);
     pie.lineFormat.visible = false;
-    pie.adjustments.load("count");
+    // Pilot v0.1 showed: adjustments are degrees, clockwise from 3 o'clock, normalised to -180..180.
+    pie.adjustments.set(0, -90); // start at 12 o'clock
+    pie.adjustments.set(1, 180); // end at 9 o'clock -> 75% clockwise
+    caption(slide, "Harvey ball: 3/4 filled from 12 o'clock", x + d + 8, y + 6);
     await ctx.sync();
-    const n = pie.adjustments.count;
-    const before = Array.from({ length: n }, (_, k) => pie.adjustments.get(k));
-    await ctx.sync();
-    const vals = before.map((r) => r.value);
-    // Default pie is 270 degrees from 3 o'clock. Detect units (degrees vs 60000ths) from the defaults.
-    const unit = vals.some((v) => Math.abs(v) > 1000) ? 60000 : 1;
-    pie.adjustments.set(0, 270 * unit); // start at 12 o'clock
-    pie.adjustments.set(1, 180 * unit); // end at 9 o'clock -> 75% clockwise
-    const label = slide.shapes.addTextBox("< should be 3/4 filled, from 12 o'clock clockwise", { left: x + d + 6, top: y + 6, width: 260, height: 16 });
-    label.textFrame.textRange.font.size = 10;
-    await ctx.sync();
-    const after = Array.from({ length: n }, (_, k) => pie.adjustments.get(k));
-    await ctx.sync();
-    return { ok: null, detail: `count=${n} defaults=${JSON.stringify(vals)} after=${JSON.stringify(after.map((r) => r.value))} (check visually)` };
+    return { ok: null, detail: "check visually" };
   })],
 
-  ["diag", "Diagonal line via rotation + arrowhead", async (pc) => run(async (ctx) => {
+  ["arrows", "Rising line, arrowhead and triangle orientation", async (pc) => run(async (ctx) => {
     const slide = ctx.presentation.slides.getItem(pc.slideId!);
-    const x = pc.slideW * 0.72, y = pc.slideH * 0.30;
+    const x = pc.slideW * 0.72, y = pc.slideH * 0.26;
+    // Rising line from bottom-left to top-right.
     const line = addPrim(slide.shapes, { kind: "line", x1: x, y1: y + 50, x2: x + 70, y2: y, color: "#C00000", width: 1.5, role: "probe-diag" });
-    // Arrowhead: an upward triangle rotated to the line's direction, its tip on the line end.
     const theta = Math.atan2(-50, 70);
     const hw = 9, hh = 8;
     const cx = x + 70 - (hh / 2) * Math.cos(theta), cy = y - (hh / 2) * Math.sin(theta);
@@ -216,53 +334,54 @@ const probes: [string, string, Probe][] = [
     head.fill.setSolidColor("#C00000");
     head.lineFormat.visible = false;
     head.rotation = 90 + (theta * 180) / Math.PI;
-    const label = slide.shapes.addTextBox("< red line should rise left-to-right, arrow tip at top-right", { left: x + 80, top: y + 16, width: 230, height: 28 });
-    label.textFrame.textRange.font.size = 10;
-    line.load("rotation");
+    caption(slide, "Red line rises left to right; arrow tip at its top-right end", x + 80, y + 14, 180);
+    // Orientation strip: rotations 0, 90, 180, 270.
+    const ty = pc.slideH * 0.44;
+    const tri = [0, 90, 180, 270].map((rot, k) => {
+      const t = slide.shapes.addGeometricShape("Triangle", { left: x + k * 26, top: ty, width: 14, height: 12 });
+      t.fill.setSolidColor("#003760");
+      t.lineFormat.visible = false;
+      if (rot) t.rotation = rot;
+      return t;
+    });
+    caption(slide, "Triangles should point: up, right, down, left", x + 110, ty - 2, 160);
+    line.load("rotation,width,height");
+    head.load("rotation");
+    tri.forEach((t) => t.load("rotation"));
     await ctx.sync();
-    return { ok: null, detail: `line rotation read back=${line.rotation.toFixed(1)} (expected -35.5; check visually)` };
+    return {
+      ok: null,
+      detail: `line rot=${r1(line.rotation)} w=${r1(line.width)} h=${r1(line.height)}; head rot=${r1(head.rotation)} (set ${r1(90 + (theta * 180) / Math.PI)}); ` +
+        `strip rot=${tri.map((t) => r1(t.rotation)).join(",")} (check visually)`,
+    };
   })],
 
   ["dash", "Dashed value line", async (pc) => run(async (ctx) => {
     const slide = ctx.presentation.slides.getItem(pc.slideId!);
-    const x = pc.slideW * 0.72, y = pc.slideH * 0.50;
+    const x = pc.slideW * 0.72, y = pc.slideH * 0.58;
     const l = addPrim(slide.shapes, { kind: "line", x1: x, y1: y, x2: x + 120, y2: y, color: "#404040", width: 1, dash: true, role: "probe-dash" });
+    caption(slide, "Dashed line should be flat", x, y + 6, 160);
+    l.load("height");
     l.lineFormat.load("dashStyle");
     await ctx.sync();
-    return { ok: l.lineFormat.dashStyle === "Dash", detail: `dashStyle=${l.lineFormat.dashStyle}` };
-  })],
-
-  ["delete", "Delete a group removes its parts", async (pc) => run(async (ctx) => {
-    const slide = ctx.presentation.slides.getItem(pc.slideId!);
-    const a = slide.shapes.addGeometricShape("Rectangle", { left: 5, top: 5, width: 10, height: 10 });
-    const b = slide.shapes.addGeometricShape("Rectangle", { left: 20, top: 5, width: 10, height: 10 });
-    a.load("id"); b.load("id");
-    const before = slide.shapes.getCount();
-    await ctx.sync();
-    const g = slide.shapes.addGroup([a.id, b.id]);
-    await ctx.sync();
-    g.delete();
-    const after = slide.shapes.getCount();
-    await ctx.sync();
-    return { ok: after.value === before.value - 2, detail: `top-level shapes before=${before.value} after=${after.value}` };
+    return { ok: l.lineFormat.dashStyle === "Dash" && l.height < 0.5, detail: `dashStyle=${l.lineFormat.dashStyle} height=${r1(l.height)}` };
   })],
 ];
+
+const NEEDS_CHART = new Set(["tag", "bigtag", "roundtrip"]);
 
 export async function runPilot(onProgress: (r: ProbeResult) => void): Promise<{ results: ProbeResult[]; pc: PilotContext }> {
   const pc: PilotContext = { slideW: 960, slideH: 540, palette: DEFAULT_PALETTE };
   const results: ProbeResult[] = [];
   for (const [id, name, fn] of probes) {
-    if (id !== "env" && id !== "slide" && !pc.slideId) {
-      const r: ProbeResult = { id, name, ok: false, detail: "skipped: no test slide" };
-      results.push(r); onProgress(r); continue;
-    }
-    if ((id === "tag" || id === "bigtag") && !pc.chartGroupId) {
-      const r: ProbeResult = { id, name, ok: false, detail: "skipped: chart not drawn" };
-      results.push(r); onProgress(r); continue;
-    }
-    const r = await timed(id, name, pc, fn);
+    let r: ProbeResult;
+    if (id !== "env" && id !== "slide" && !pc.slideId) r = { id, name, ok: false, detail: "skipped: no test slide" };
+    else if (NEEDS_CHART.has(id) && !pc.chartGroupId) r = { id, name, ok: false, detail: "skipped: chart not drawn" };
+    else r = await timed(id, name, pc, fn);
     results.push(r);
     onProgress(r);
   }
   return { results, pc };
 }
+
+export { TAG };

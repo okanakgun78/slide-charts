@@ -1,10 +1,12 @@
-import { DEFAULT_PALETTE } from "./engine/format";
-import { approxMeasure, canvasMeasure } from "./engine/measure";
+import { DEFAULT_PALETTE, normHex } from "./engine/format";
+import { canvasMeasure } from "./engine/measure";
 import { layoutStacked } from "./engine/stacked";
 import { toSvg } from "./engine/svg";
-import type { Frame, StackedSpec } from "./engine/types";
-import { chartStyle, FALLBACK_FONTS, runPilot, SAMPLE_SPEC, type PilotContext, type ProbeResult } from "./ppt/probes";
-import { APP_VERSION, drawChart, getSelectedChart, readThemeAccents, refitFrame } from "./ppt/render";
+import type { Frame } from "./engine/types";
+import {
+  chartStyle, FALLBACK_FONTS, measureFor, perturb, runPilot, SAMPLE_SPEC, type PilotContext, type ProbeResult,
+} from "./ppt/probes";
+import { APP_VERSION, drawChart, errText, findSelectedChart, readThemeAccents, redrawChart } from "./ppt/render";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -33,7 +35,6 @@ function updateReport() {
     app: APP_VERSION,
     when: new Date().toISOString(),
     office: d ? `${d.host} ${d.platform} ${d.version}` : "n/a",
-    ua: navigator.userAgent,
     calibration: state.pc ? { font: state.pc.fontName, measureRatio: state.pc.measureRatio, palette: state.pc.palette } : null,
     results: state.results.map((r) => ({ id: r.id, ok: r.ok, ms: r.ms, detail: r.detail })),
     actions: state.actions,
@@ -46,25 +47,14 @@ function logAction(a: Record<string, unknown>) {
   updateReport();
 }
 
-function measureFn() {
-  const pc = state.pc;
-  return canvasMeasure(`"${pc?.fontName ?? "Aptos"}", ${FALLBACK_FONTS}`, pc?.measureRatio ?? 1);
-}
-
-function errText(e: unknown): string {
-  const err = e as { code?: string; message?: string };
-  return `${err.code ?? "Error"}: ${err.message ?? String(e)}`;
-}
-
-/** New numbers: each value moves by up to ±25%, rounded like the input. */
-function perturb(spec: StackedSpec): StackedSpec {
-  return {
-    ...spec,
-    series: spec.series.map((s) => ({
-      ...s,
-      values: s.values.map((v) => (v === null ? null : Math.max(1, Math.round(v * (0.75 + Math.random() * 0.5))))),
-    })),
-  };
+async function themePalette(slideId: string): Promise<string[]> {
+  try {
+    const hex = (await readThemeAccents(slideId)).map(normHex);
+    if (hex.every((h) => h)) return hex as string[];
+  } catch {
+    /* fall back below */
+  }
+  return state.pc?.palette ?? DEFAULT_PALETTE;
 }
 
 async function onRun() {
@@ -90,38 +80,26 @@ async function onRun() {
 async function onRedraw() {
   setBusy(true);
   const t0 = performance.now();
+  let step = "find selected chart";
   try {
-    await PowerPoint.run(async (ctx) => {
-      const sel = await getSelectedChart(ctx);
-      if (!sel) {
-        $("selection").textContent = "Select a Slide Charts chart first.";
-        logAction({ action: "redraw", result: "no chart selected" });
-        return;
-      }
-      const moved =
-        Math.abs(sel.current.left - sel.stored.drawn.left) > 0.5 || Math.abs(sel.current.top - sel.stored.drawn.top) > 0.5;
-      const resized =
-        Math.abs(sel.current.width - sel.stored.drawn.width) > 0.5 || Math.abs(sel.current.height - sel.stored.drawn.height) > 0.5;
-      const frame: Frame = refitFrame(sel.stored, sel.current);
-      let palette = state.pc?.palette ?? DEFAULT_PALETTE;
-      try {
-        palette = await readThemeAccents(ctx, sel.slide);
-      } catch {
-        /* keep fallback palette */
-      }
-      sel.shape.delete();
-      await ctx.sync();
-      const r = await drawChart(ctx, sel.slide, perturb(sel.stored.spec), frame, chartStyle(palette), measureFn());
-      sel.slide.setSelectedShapes([r.groupId]);
-      await ctx.sync();
-      logAction({
-        action: "redraw", moved, resized,
-        before: sel.current, frameAfter: frame,
-        ms: Math.round(performance.now() - t0),
-      });
+    const ref = await findSelectedChart();
+    if (!ref) {
+      $("selection").textContent = "Select a Slide Charts chart first.";
+      logAction({ action: "redraw", result: "no chart selected" });
+      return;
+    }
+    step = "read theme";
+    const palette = await themePalette(ref.slideId);
+    step = "redraw";
+    const r = await redrawChart(ref, perturb(ref.stored.spec), chartStyle(palette), measureFor(state.pc));
+    $("selection").textContent = "Redrawn ✓";
+    logAction({
+      action: "redraw", ok: true, moved: r.moved, resized: r.resized, deleteStrategy: r.deleteStrategy,
+      before: ref.current, frameAfter: r.frame, log: r.log, ms: Math.round(performance.now() - t0),
     });
   } catch (e) {
-    logAction({ action: "redraw", error: errText(e), ms: Math.round(performance.now() - t0) });
+    $("selection").textContent = `Redraw failed at "${step}" — details in the report.`;
+    logAction({ action: "redraw", step, error: errText(e), ms: Math.round(performance.now() - t0) });
   } finally {
     setBusy(false);
   }
@@ -131,23 +109,21 @@ async function onInsert() {
   setBusy(true);
   const t0 = performance.now();
   try {
-    await PowerPoint.run(async (ctx) => {
-      const slide = ctx.presentation.getSelectedSlides().getItemAt(0);
+    const where = await PowerPoint.run(async (ctx) => {
+      const slides = ctx.presentation.getSelectedSlides();
+      slides.load("items/id");
       const ps = ctx.presentation.pageSetup;
       ps.load("slideWidth,slideHeight");
       await ctx.sync();
-      let palette = DEFAULT_PALETTE;
-      try {
-        palette = await readThemeAccents(ctx, slide);
-      } catch {
-        /* keep fallback palette */
-      }
-      const frame: Frame = { left: ps.slideWidth * 0.2, top: ps.slideHeight * 0.2, width: ps.slideWidth * 0.6, height: ps.slideHeight * 0.6 };
-      const r = await drawChart(ctx, slide, SAMPLE_SPEC, frame, chartStyle(palette), measureFn());
-      slide.setSelectedShapes([r.groupId]);
-      await ctx.sync();
-      logAction({ action: "insert", shapes: r.shapeCount, ms: Math.round(performance.now() - t0) });
+      return { slideId: slides.items[0].id, w: ps.slideWidth, h: ps.slideHeight };
     });
+    const frame: Frame = { left: where.w * 0.2, top: where.h * 0.2, width: where.w * 0.6, height: where.h * 0.6 };
+    const r = await drawChart(where.slideId, SAMPLE_SPEC, frame, chartStyle(await themePalette(where.slideId)), measureFor(state.pc));
+    await PowerPoint.run(async (ctx) => {
+      ctx.presentation.slides.getItem(where.slideId).setSelectedShapes([r.groupId]);
+      await ctx.sync();
+    });
+    logAction({ action: "insert", shapes: r.shapeCount, ms: Math.round(performance.now() - t0) });
   } catch (e) {
     logAction({ action: "insert", error: errText(e), ms: Math.round(performance.now() - t0) });
   } finally {
@@ -160,12 +136,10 @@ function onSelectionChanged() {
   window.clearTimeout(selTimer);
   selTimer = window.setTimeout(async () => {
     try {
-      await PowerPoint.run(async (ctx) => {
-        const sel = await getSelectedChart(ctx);
-        $("selection").textContent = sel
-          ? `Selection: chart (${sel.stored.spec.type}, ${sel.stored.spec.categories.length} categories × ${sel.stored.spec.series.length} series)`
-          : "Selection: not a Slide Charts chart";
-      });
+      const ref = await findSelectedChart();
+      $("selection").textContent = ref
+        ? `Selection: chart (${ref.stored.spec.type}, ${ref.stored.spec.categories.length} categories × ${ref.stored.spec.series.length} series)`
+        : "Selection: not a Slide Charts chart";
       if (!state.actions.some((a) => a.action === "selection-event")) logAction({ action: "selection-event", ok: true });
     } catch (e) {
       $("selection").textContent = `Selection: (${errText(e)})`;
@@ -188,8 +162,7 @@ async function onCopy() {
 
 function showPreview() {
   const frame: Frame = { left: 0, top: 0, width: 560, height: 320 };
-  const m = typeof document !== "undefined" ? canvasMeasure(FALLBACK_FONTS) : approxMeasure;
-  const { prims } = layoutStacked(SAMPLE_SPEC, frame, chartStyle(DEFAULT_PALETTE), m);
+  const { prims } = layoutStacked(SAMPLE_SPEC, frame, chartStyle(DEFAULT_PALETTE), canvasMeasure(FALLBACK_FONTS));
   $("preview").innerHTML = toSvg(prims, frame);
 }
 
