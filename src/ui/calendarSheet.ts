@@ -70,6 +70,10 @@ export class CalendarSheet {
       <td><select data-k="${k}" data-f="align">${opt("top-left", "Top left", r.align)}${opt("center", "Centre", r.align)}</select></td>
       <td class="ctr"><button class="mini" data-k="${k}" data-act="up" title="Move up">↑</button><button class="mini" data-k="${k}" data-act="del" title="Delete row">✕</button></td>
     </tr>`).join("");
+    if (!this.rows.length) {
+      this.rowsRoot.innerHTML = `<p class="muted pad">No rows: the calendar is a header only. Use “+ Row” to add a row of text below it.</p>`;
+      return;
+    }
     this.rowsRoot.innerHTML = `<table class="sheet cal"><thead><tr><th class="corner">Row</th><th class="corner">Height</th><th class="corner">Style</th><th class="corner">Fill</th><th class="corner">Align</th><th class="corner"></th></tr></thead><tbody>${body}</tbody></table>`;
   }
 
@@ -78,6 +82,11 @@ export class CalendarSheet {
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
     if (!cols.length) {
       this.cellsRoot.innerHTML = `<p class="muted pad">Enter a start and end date above.</p>`;
+      return;
+    }
+    if (!this.rows.length) {
+      // One box to paste an Excel calendar into, or to type a first entry (creates row 1).
+      this.cellsRoot.innerHTML = `<textarea class="first" data-ci="0" data-k="0" data-key="${cols[0].key}" rows="2" placeholder="Paste a calendar from Excel here, or type the first entry for ${esc(cols[0].label)} to start a row"></textarea>`;
       return;
     }
     const head = `<th class="corner">Date</th>` + this.rows.map((r, k) => `<th class="corner">${esc(r.label || `Row ${k + 1}`)}</th>`).join("");
@@ -112,7 +121,6 @@ export class CalendarSheet {
     if (!t.dataset?.act) return;
     const k = Number(t.dataset.k);
     if (t.dataset.act === "del") {
-      if (this.rows.length <= 1) return;
       this.rows.splice(k, 1);
     } else if (t.dataset.act === "up" && k > 0) {
       [this.rows[k - 1], this.rows[k]] = [this.rows[k], this.rows[k - 1]];
@@ -124,10 +132,20 @@ export class CalendarSheet {
   private onCellInput(e: Event) {
     const t = e.target as HTMLTextAreaElement;
     if (t.dataset?.key === undefined) return;
-    const r = this.rows[Number(t.dataset.k)];
+    const k = Number(t.dataset.k);
+    const firstRow = !this.rows.length;
+    while (this.rows.length <= k) this.rows.push(newRow(this.rows.length));
+    const r = this.rows[k];
     if (t.value.trim()) r.cells[t.dataset.key] = t.value;
     else delete r.cells[t.dataset.key];
     t.rows = Math.min(6, Math.max(1, t.value.split("\n").length));
+    if (firstRow) {
+      // Switch from the single entry box to the full grid, keeping the cursor in the same cell.
+      this.render();
+      const cell = this.cellsRoot.querySelector<HTMLTextAreaElement>(`textarea[data-k="0"][data-ci="0"]`);
+      cell?.focus();
+      cell?.setSelectionRange(cell.value.length, cell.value.length);
+    }
     this.opts.onChange();
   }
 

@@ -2,7 +2,7 @@
 
 import { layoutCategory } from "./engine/category";
 import { canvasMeasure } from "./engine/measure";
-import { calendarColumns } from "./engine/calendar";
+import { calendarColumns, naturalHeaderHeight } from "./engine/calendar";
 import { parseDate } from "./engine/dates";
 import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCalendar, sampleCategory, sampleGantt } from "./engine/spec";
 import { toSvg } from "./engine/svg";
@@ -270,7 +270,14 @@ async function apply() {
       return;
     }
     await ensureCalibrated(fresh.slideId);
-    const r = await redrawChart(fresh, spec, await styleForSlide(fresh.slideId), measure());
+    const style = await styleForSlide(fresh.slideId);
+    if (spec.type === "calendar" && spec.rows.length) {
+      // Rows added to a header-only calendar: grow the frame downwards so they have room.
+      const need = naturalHeaderHeight(spec, fresh.stored.frame.width, style, measure()) +
+        spec.rows.reduce((a, r) => a + Math.max(0.5, r.height || 1), 0) * style.fontSize * 1.6;
+      if (fresh.stored.frame.height < need) fresh.stored.frame = { ...fresh.stored.frame, height: need };
+    }
+    const r = await redrawChart(fresh, spec, style, measure());
     state.ref = { slideId: fresh.slideId, groupId: r.groupId, stored: r.stored, current: r.stored.drawn };
     $("ed-title").textContent = describe(spec);
     status(r.warnings.length ? `⚠ ${r.warnings.join("; ")}` : `Updated · ${(performance.now() - t0) / 1000 < 1 ? "<1" : ((performance.now() - t0) / 1000).toFixed(1)} s`);
@@ -306,13 +313,18 @@ async function insertChart(type: ChartSpec["type"], mode: Mode) {
       if (sel.items.length === 1 && s.level === 0 && s.width > 60 && s.height > 40) {
         const tag = s.tags.getItemOrNullObject(TAG);
         await ctx.sync();
-        if (tag.isNullObject) frame = { left: s.left, top: s.top, width: s.width, height: s.height };
+        if (tag.isNullObject) return { slideId: slides.items[0].id, frame: { left: s.left, top: s.top, width: s.width, height: s.height }, fromSelection: true };
       }
-      return { slideId: slides.items[0].id, frame };
+      return { slideId: slides.items[0].id, frame, fromSelection: false };
     });
     await ensureCalibrated(target.slideId);
     const spec: ChartSpec = type === "gantt" ? sampleGantt(settings.dateOrder) : type === "calendar" ? sampleCalendar(settings.dateOrder) : sampleCategory(type, mode);
-    const r = await drawChart(target.slideId, spec, target.frame, await styleForSlide(target.slideId), measure());
+    const style = await styleForSlide(target.slideId);
+    // A new calendar has no rows: give it the header's natural height, not the default chart area.
+    if (spec.type === "calendar" && !spec.rows.length && !target.fromSelection) {
+      target.frame.height = naturalHeaderHeight(spec, target.frame.width, style, measure());
+    }
+    const r = await drawChart(target.slideId, spec, target.frame, style, measure());
     await PowerPoint.run(async (ctx) => {
       ctx.presentation.slides.getItem(target.slideId).setSelectedShapes([r.groupId]);
       await ctx.sync();

@@ -1,6 +1,6 @@
 {
   "name": "slide-charts",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Consulting-style charts for PowerPoint (Office add-in).",
   "scripts": {
     "dev": "vite",

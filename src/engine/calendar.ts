@@ -9,6 +9,14 @@ import type { CalendarSpec, Frame, GanttTier, Layout, LinePrim, Measure, Prim, R
 
 const WEEKDAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/** Height of the header alone at its natural size (used to size a new, row-less calendar). */
+export function naturalHeaderHeight(spec: CalendarSpec, width: number, style: Style, measure: Measure): number {
+  const cal = calendarColumns(spec);
+  if (!cal) return style.fontSize * 4.4;
+  const x = (d: number) => ((d - cal.t0) / (cal.t1 - cal.t0)) * width;
+  return timelineHeader({ tiers: cal.tiers, t0: cal.t0, t1: cal.t1, x, top: 0, filled: spec.headerStyle !== "plain", fill: "#000", style, measure }).height;
+}
+
 /** Calendar columns need room for text, so days are chosen only for short ranges. */
 export function autoCalendarTiers(span: number): GanttTier[] {
   return span <= 14 ? ["month", "day"] : span <= 70 ? ["month", "week"] : span <= 500 ? ["year", "month"] : span <= 1830 ? ["year", "quarter"] : ["year"];
@@ -67,7 +75,7 @@ export function layoutCalendar(spec: CalendarSpec, frame: Frame, style: Style, m
   const filled = spec.headerStyle !== "plain";
 
   // ---- Horizontal ----
-  const rows = spec.rows.length ? spec.rows : [{ label: "", height: 4, style: "normal" as const, align: "top-left" as const, cells: {} }];
+  const rows = spec.rows;
   const showLabels = spec.showLabels && rows.some((r) => r.label.trim());
   const labelW = showLabels ? Math.min(Math.max(...rows.map((r) => measure(r.label, fs, true))) + 2 * pad, frame.width * 0.25) : 0;
   const tlLeft = frame.left + labelW;
@@ -75,7 +83,17 @@ export function layoutCalendar(spec: CalendarSpec, frame: Frame, style: Style, m
   const x = (d: number) => tlLeft + ((d - t0) / (t1 - t0)) * (tlRight - tlLeft);
 
   // ---- Header ----
-  const hdr = timelineHeader({ tiers, t0, t1, x, top: frame.top, filled, fill: spec.headerColor ?? style.palette[0], style, measure });
+  const headerOpts = { tiers, t0, t1, x, top: frame.top, filled, fill: spec.headerColor ?? style.palette[0], style, measure };
+  if (!rows.length) {
+    // No rows: the calendar is just the timeline header. It scales with the frame within limits,
+    // so a tall frame left over from deleted rows does not produce giant header cells.
+    const natural = timelineHeader(headerOpts).height;
+    const scale = Math.min(1.6, Math.max(0.6, frame.height / natural));
+    const h = timelineHeader({ ...headerOpts, scale });
+    const edge = filled ? [] : [{ kind: "line" as const, x1: frame.left, y1: frame.top + h.height, x2: tlRight, y2: frame.top + h.height, color: style.axisColor, width: 0.75, role: "bottom" }];
+    return { prims: [...h.lines, ...edge, ...h.rects, ...h.texts], warnings };
+  }
+  const hdr = timelineHeader(headerOpts);
   const bodyTop = frame.top + hdr.height + (filled ? 0 : pad * 0.5);
   const bodyBottom = frame.top + frame.height;
   if (bodyBottom - bodyTop < lineH * rows.length) warnings.push("The calendar is too short for its rows: make it taller");

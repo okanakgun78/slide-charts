@@ -84,26 +84,20 @@ export function sampleGantt(order: DateOrder, today = todayDay()): GanttSpec {
   };
 }
 
-/** This week (Monday to Sunday), structured like the user's sample: plan, an italic row, a yellow totals row. */
+/** This week (Monday to Sunday) as a header-only calendar; rows are added by the user. */
 export function sampleCalendar(order: DateOrder, today = todayDay()): CalendarSpec {
   const monday = today - fromDay(today).wd;
-  const k = (n: number) => isoDay(monday + n);
   return {
     v: 2,
     type: "calendar",
-    start: k(0),
-    end: k(6),
+    start: isoDay(monday),
+    end: isoDay(monday + 6),
     tiers: ["month", "day"],
     headerStyle: "filled",
     shadeWeekends: false,
     showLabels: false,
     dateOrder: order,
-    rows: [
-      { label: "Plan", height: 5, style: "normal", align: "top-left", cells: {
-        [k(0)]: "1. Kick-off\n2. Team set-up", [k(2)]: "1. Workshop:\n• Diagnosis\n• Hypotheses", [k(4)]: "1. Steering committee" } },
-      { label: "Location", height: 1, style: "italic", align: "center", cells: { [k(0)]: "Istanbul", [k(2)]: "Client site", [k(4)]: "Client site" } },
-      { label: "Status", height: 1, style: "bold", align: "center", fill: "#FFFF00", cells: { [k(0)]: "Started", [k(4)]: "Decision" } },
-    ],
+    rows: [],
   };
 }
 

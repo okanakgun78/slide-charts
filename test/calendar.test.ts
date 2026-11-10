@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calendarColumns, layoutCalendar } from "../src/engine/calendar";
+import { calendarColumns, layoutCalendar, naturalHeaderHeight } from "../src/engine/calendar";
 import { toDay } from "../src/engine/dates";
 import { bbox } from "../src/engine/geometry";
 import { approxMeasure } from "../src/engine/measure";
@@ -78,5 +78,27 @@ describe("calendar layout (sample slide)", () => {
   it("shows an optional label column", () => {
     const r = run({ ...sample, showLabels: true });
     expect((r.prims.find((p) => p.role === "rlab:2") as TextPrim).text).toBe("Total");
+  });
+});
+
+describe("header-only calendar (no rows)", () => {
+  const empty: CalendarSpec = { ...sample, rows: [] };
+  it("is the default for a new calendar", () => {
+    expect(sampleCalendar("DMY", today).rows).toEqual([]);
+  });
+  it("draws only the header, at natural height when the frame matches", () => {
+    const natural = naturalHeaderHeight(empty, frame.width, style, approxMeasure);
+    const r = layoutCalendar(empty, { ...frame, height: natural }, style, approxMeasure);
+    expect(r.warnings).toEqual([]);
+    expect(r.prims.some((p) => p.role.startsWith("cell:") || p.role.startsWith("vgrid:"))).toBe(false);
+    expect(bbox(r.prims).height).toBeCloseTo(natural, 6);
+    expect((r.prims.find((p) => p.role === "hdt:day:0:2") as TextPrim).text).toBe("Mon");
+  });
+  it("stretches with the frame within limits (a tall left-over frame is capped)", () => {
+    const natural = naturalHeaderHeight(empty, frame.width, style, approxMeasure);
+    const taller = layoutCalendar(empty, { ...frame, height: natural * 1.3 }, style, approxMeasure);
+    expect(bbox(taller.prims).height).toBeCloseTo(natural * 1.3, 6);
+    const huge = layoutCalendar(empty, { ...frame, height: natural * 6 }, style, approxMeasure);
+    expect(bbox(huge.prims).height).toBeCloseTo(natural * 1.6, 6);
   });
 });

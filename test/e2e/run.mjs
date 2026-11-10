@@ -271,11 +271,27 @@ try {
   assert.equal(s.type, "calendar");
   assert.equal(await page.isVisible("#ed-cal"), true);
   assert.equal(await page.isVisible("#ed-gantt"), false);
+  assert.deepEqual(s.rows, []);
+  g = (await charts()).at(-1);
+  assert.ok(g.children.every((k) => (k.type === "TextBox" ? k.font?.color === "#FFFFFF" : true)), "header-only: all text is header text");
+  assert.ok(g.height < 80, `header-only calendar has natural height, got ${g.height}`);
+  assert.equal(await page.locator("#ccells textarea.first").count(), 1, "single entry box when there are no rows");
+  // Typing in the entry box creates the first row.
+  await page.fill("#ccells textarea.first", "Kick-off");
+  await settle();
+  s = await spec();
+  assert.equal(s.rows.length, 1);
+  assert.equal(Object.values(s.rows[0].cells)[0], "Kick-off");
+  assert.equal(await page.locator("#ccells textarea").count(), 7);
+  await page.click("#c-addrow");
+  await page.click("#c-addrow");
+  await settle();
   assert.equal(await page.locator("#ccells textarea").count(), 7 * 3, "7 days x 3 rows");
   g = (await charts()).at(-1);
-  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text.includes("\n")), "multi-line cell text kept");
-  assert.ok(g.children.some((k) => k.type === "TextBox" && k.font?.italic), "italic row");
-  ok("insert Calendar: this week, sample rows (plan, italic row, yellow totals row)");
+  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text === "Kick-off"), "cell text drawn");
+  const cell = g.children.find((k) => k.type === "TextBox" && k.text === "Kick-off");
+  assert.ok(cell.height >= 12 * 1.5, `first row has room after growing the frame, got ${cell.height}`);
+  ok("insert Calendar: header only by default; typing in the entry box starts a row; + Row adds more");
 
   // 21. Type multi-line text into a cell.
   await page.fill('#ccells textarea[data-k="0"][data-ci="1"]', "1. Zone 2 run\n2. Stretching");
@@ -317,6 +333,19 @@ try {
   await settle();
   assert.equal(await page.locator("#ccells textarea").count(), 7 * 2);
   ok("typing a new end date adds the missing days");
+
+  // 25. Delete every row: only the header stays.
+  while (await page.locator('#crows button[data-act="del"]').count()) {
+    await page.locator('#crows button[data-act="del"]').first().click();
+  }
+  await settle();
+  s = await spec();
+  assert.deepEqual(s.rows, []);
+  g = (await charts()).at(-1);
+  assert.ok(!g.children.some((k) => k.type === "TextBox" && k.font?.color !== "#FFFFFF"), "no body text left");
+  assert.ok(g.height < 120, `header only after deleting rows (capped height), got ${g.height}`);
+  assert.equal(await page.locator("#ccells textarea.first").count(), 1);
+  ok("deleting all rows leaves just the timeline header");
 
   assert.deepEqual(await errors(), [], "no Office.js errors");
   assert.deepEqual(pageErrors, [], "no page errors");

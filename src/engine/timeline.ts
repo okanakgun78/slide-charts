@@ -110,6 +110,8 @@ export interface HeaderOptions {
   fill: string;
   style: Style;
   measure: Measure;
+  /** Multiplies the natural tier heights (a header-only calendar stretched by the user). */
+  scale?: number;
 }
 
 /** Timeline header: one row per tier; day cells use two lines ("02" over "Mon") when they fit. */
@@ -123,7 +125,7 @@ export function timelineHeader(o: HeaderOptions): { rects: RectPrim[]; lines: Li
   const one = filled ? fs * 1.6 : fs * 1.3;
   const dayW = tiers.includes("day") ? x(t0 + 1) - x(t0) : 0;
   const twoLine = tiers.includes("day") && measure("Wed", fs, true) <= dayW - 2 && measure("00", fs, true) <= dayW - 2;
-  const tierH = tiers.map((t) => (t === "day" && twoLine ? (filled ? fs * 2.75 : fs * 2.5) : one));
+  const tierH = tiers.map((t) => (t === "day" && twoLine ? (filled ? fs * 2.75 : fs * 2.5) : one) * (o.scale ?? 1));
   const rects: RectPrim[] = [];
   const lines: LinePrim[] = [];
   const texts: TextPrim[] = [];
