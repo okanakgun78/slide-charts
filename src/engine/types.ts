@@ -104,9 +104,9 @@ export type GanttRowKind = "task" | "milestone" | "header";
 export interface GanttRow {
   label: string;
   kind: GanttRowKind;
-  /** ISO dates (yyyy-mm-dd). End is inclusive; ignored for milestones and headers. */
-  start: string | null;
-  end: string | null;
+  /** Dates as typed or pasted (parsed with the spec's date order). End is inclusive. */
+  start: string;
+  end: string;
   color?: string;
   note?: string;
 }
@@ -119,6 +119,8 @@ export interface GanttSpec {
   showToday: boolean;
   /** Show the date next to milestones. */
   milestoneDates: boolean;
+  /** How to read ambiguous dates like 04/05/2026. */
+  dateOrder: "DMY" | "MDY";
 }
 
 export type ChartSpec = CategorySpec | GanttSpec;

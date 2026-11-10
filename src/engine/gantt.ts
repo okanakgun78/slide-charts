@@ -1,6 +1,189 @@
-// Gantt/timeline layout (implemented in v0.4).
-import type { Frame, GanttSpec, Layout, Measure, Style } from "./types";
+// Gantt / timeline layout.
+// Rows: tasks (bars), milestones (diamonds) and group headers (bold label + summary bar over the
+// rows below it, up to the next header). Time scale is chosen from the span (weeks, months,
+// quarters or years) with a two-tier header (e.g. months under years).
 
-export function layoutGantt(_spec: GanttSpec, _frame: Frame, _style: Style, _measure: Measure): Layout {
-  return { prims: [], warnings: ["Gantt charts arrive in v0.4"] };
+import { fromDay, monthName, parseDate, shortDate, todayDay, toDay } from "./dates";
+import type { Frame, GanttSpec, Layout, LinePrim, Measure, Prim, RectPrim, ShapePrim, Style, TextPrim } from "./types";
+
+export const MILESTONE_COLOR = "#CD9700";
+const TODAY_COLOR = "#C00000";
+
+type Scale = Exclude<GanttSpec["scale"], "auto">;
+
+interface Period { start: number; end: number; label: string; short: string }
+
+export function pickScale(spanDays: number): Scale {
+  return spanDays <= 120 ? "week" : spanDays <= 450 ? "month" : spanDays <= 1830 ? "quarter" : "year";
+}
+
+/** Bottom-tier periods covering [lo, hi] and the top-tier groups above them. */
+export function periods(lo: number, hi: number, scale: Scale): { bottom: Period[]; top: Period[] } {
+  const bottom: Period[] = [];
+  const top: Period[] = [];
+  const pushTop = (start: number, end: number, label: string, short: string) => {
+    const last = top[top.length - 1];
+    if (last && last.label === label) last.end = end;
+    else top.push({ start, end, label, short });
+  };
+  if (scale === "week") {
+    let d = lo - fromDay(lo).wd; // Monday
+    while (d <= hi) {
+      const { y, m, d: dd } = fromDay(d);
+      bottom.push({ start: d, end: d + 6, label: String(dd), short: String(dd) });
+      pushTop(d, d + 6, `${monthName(m)} ${y}`, monthName(m));
+      d += 7;
+    }
+  } else if (scale === "month" || scale === "quarter") {
+    const step = scale === "month" ? 1 : 3;
+    const f = fromDay(lo);
+    let y = f.y, m = scale === "month" ? f.m : Math.floor((f.m - 1) / 3) * 3 + 1;
+    for (;;) {
+      const start = toDay(y, m, 1);
+      if (start > hi) break;
+      const ny = m + step > 12 ? y + 1 : y, nm = ((m + step - 1) % 12) + 1;
+      const end = toDay(ny, nm, 1) - 1;
+      const label = scale === "month" ? monthName(m) : `Q${(m + 2) / 3}`;
+      bottom.push({ start, end, label, short: scale === "month" ? label[0] : label });
+      pushTop(start, end, String(y), `'${String(y).slice(2)}`);
+      y = ny; m = nm;
+    }
+  } else {
+    for (let y = fromDay(lo).y; toDay(y, 1, 1) <= hi; y++) {
+      bottom.push({ start: toDay(y, 1, 1), end: toDay(y, 12, 31), label: String(y), short: `'${String(y).slice(2)}` });
+    }
+  }
+  return { bottom, top };
+}
+
+export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure: Measure, today = todayDay()): Layout {
+  const warnings: string[] = [];
+  const fs = style.fontSize;
+  const small = Math.round(fs * 0.85 * 2) / 2;
+  const lineH = fs * 1.3;
+  const pad = fs * 0.4;
+  const order = spec.dateOrder;
+
+  // ---- Parse rows ----
+  const rows = spec.rows.map((r) => {
+    if (r.kind === "header") return { r, s: null as number | null, e: null as number | null };
+    const s = parseDate(r.start, order, "start");
+    let e = r.kind === "milestone" ? s : parseDate(r.end || r.start, order, "end");
+    if (s === null && (r.start.trim() || r.kind !== "task" || r.end.trim())) warnings.push(`"${r.label || "row"}": date not recognised`);
+    if (s !== null && e === null) { warnings.push(`"${r.label || "row"}": end date not recognised`); e = s; }
+    if (s !== null && e !== null && e < s) { warnings.push(`"${r.label}": end before start (swapped)`); e = s; }
+    return { r, s, e: s === null ? null : e };
+  });
+  rows.forEach((row, k) => {
+    if (row.r.kind !== "header") return;
+    let s = Infinity, e = -Infinity;
+    for (let q = k + 1; q < rows.length && rows[q].r.kind !== "header"; q++) {
+      if (rows[q].s !== null) { s = Math.min(s, rows[q].s!); e = Math.max(e, rows[q].e!); }
+    }
+    if (Number.isFinite(s)) { row.s = s; row.e = e; }
+  });
+  const dated = rows.filter((x) => x.s !== null);
+  if (!dated.length) return { prims: [], warnings: [...warnings, "Enter start and end dates"] };
+  const lo = Math.min(...dated.map((x) => x.s!));
+  const hi = Math.max(...dated.map((x) => x.e!));
+  const scale: Scale = spec.scale === "auto" ? pickScale(hi - lo + 1) : spec.scale;
+  const { bottom, top } = periods(lo, hi, scale);
+  const t0 = bottom[0].start;
+  const t1 = bottom[bottom.length - 1].end + 1;
+
+  // ---- Horizontal layout ----
+  const grouped = rows.some((x) => x.r.kind === "header");
+  const indent = grouped ? fs * 0.8 : 0;
+  const labelW = Math.min(
+    Math.max(...rows.map((x) => measure(x.r.label, fs, x.r.kind === "header") + (x.r.kind === "header" ? 0 : indent))) + pad,
+    frame.width * 0.32,
+  );
+  const tlLeft = frame.left + labelW + pad;
+  // Leave half a diamond of room so a milestone on the last day stays inside the frame.
+  const msSize = fs * 1.15;
+  const tlRight = frame.left + frame.width - (rows.some((r) => r.r.kind === "milestone") ? msSize / 2 : 0);
+  const x = (d: number) => tlLeft + ((d - t0) / (t1 - t0)) * (tlRight - tlLeft);
+
+  // ---- Vertical layout ----
+  const tiers = scale === "year" ? 1 : 2;
+  const headerH = tiers * lineH + pad * 0.5;
+  const showToday = spec.showToday && today >= t0 && today < t1;
+  const footH = showToday ? small * 1.3 : 0;
+  const avail = frame.height - headerH - footH;
+  const n = rows.length;
+  let rowH = avail / n;
+  if (rowH < fs * 1.3) warnings.push("Too many rows for this height: make the chart taller or the font smaller");
+  rowH = Math.min(Math.max(rowH, fs * 1.3), fs * 2.6);
+  const bodyTop = frame.top + headerH;
+  const bodyBottom = bodyTop + rowH * n;
+
+  const grid: LinePrim[] = [];
+  const bars: (RectPrim | ShapePrim)[] = [];
+  const texts: TextPrim[] = [];
+  const text = (t: Omit<TextPrim, "kind" | "size" | "color"> & { size?: number; color?: string }) =>
+    texts.push({ kind: "text", size: fs, color: style.textColor, ...t });
+
+  // ---- Header and grid ----
+  const tierY = (k: number) => frame.top + k * lineH;
+  if (tiers === 2) {
+    top.forEach((p, k) => {
+      const a = x(Math.max(p.start, t0)), b = x(Math.min(p.end + 1, t1));
+      const label = measure(p.label, fs, true) <= b - a - 4 ? p.label : measure(p.short, fs, true) <= b - a - 4 ? p.short : "";
+      if (label) text({ x: a, y: tierY(0), w: b - a, h: lineH, text: label, bold: true, align: "center", valign: "middle", role: `top:${k}` });
+      if (k > 0) grid.push({ kind: "line", x1: a, y1: frame.top, x2: a, y2: bodyBottom, color: style.axisColor, width: 0.75, role: `topgrid:${k}` });
+    });
+  }
+  bottom.forEach((p, k) => {
+    const a = x(p.start), b = x(p.end + 1);
+    const hs = tiers === 2 ? small : fs;
+    const label = measure(p.label, hs) <= b - a - 2 ? p.label : measure(p.short, hs) <= b - a - 2 ? p.short : "";
+    if (label) text({ x: a, y: tierY(tiers - 1), w: b - a, h: lineH, text: label, size: hs, bold: tiers === 1, align: "center", valign: "middle", role: `per:${k}` });
+    if (k > 0) grid.push({ kind: "line", x1: a, y1: tierY(tiers - 1), x2: a, y2: bodyBottom, color: style.gridColor, width: 0.5, role: `grid:${k}` });
+  });
+  grid.push({ kind: "line", x1: frame.left, y1: bodyTop, x2: tlRight, y2: bodyTop, color: style.axisColor, width: 0.75, role: "headline" });
+  grid.push({ kind: "line", x1: frame.left, y1: bodyBottom, x2: tlRight, y2: bodyBottom, color: style.axisColor, width: 0.75, role: "footline" });
+
+  // ---- Rows ----
+  const barH = rowH * 0.5;
+  rows.forEach((row, k) => {
+    const y0 = bodyTop + k * rowH;
+    const cy = y0 + rowH / 2;
+    const { r } = row;
+    const isHeader = r.kind === "header";
+    if (k > 0) grid.push({ kind: "line", x1: frame.left, y1: y0, x2: tlRight, y2: y0, color: style.gridColor, width: 0.5, role: `rowline:${k}` });
+    text({ x: frame.left + (isHeader ? 0 : indent), y: y0, w: labelW - (isHeader ? 0 : indent), h: rowH, text: r.label, bold: isHeader, wrap: measure(r.label, fs, isHeader) > labelW - (isHeader ? 0 : indent), align: "left", valign: "middle", role: `lab:${k}` });
+    if (row.s === null || row.e === null) return;
+    const xa = x(row.s), xb = x(row.e + 1);
+    let endX = xb;
+    if (isHeader) {
+      const h = Math.max(2, rowH * 0.16);
+      bars.push({ kind: "rect", x: xa, y: cy - h / 2, w: xb - xa, h, fill: r.color ?? style.textColor, role: `sum:${k}` });
+    } else if (r.kind === "task") {
+      bars.push({ kind: "rect", x: xa, y: cy - barH / 2, w: Math.max(xb - xa, 1), h: barH, fill: r.color ?? style.palette[0], role: `bar:${k}` });
+    } else {
+      const d = Math.min(rowH * 0.72, msSize);
+      const xm = x(row.s + 0.5);
+      bars.push({ kind: "shape", shape: "Diamond", x: xm - d / 2, y: cy - d / 2, w: d, h: d, fill: r.color ?? MILESTONE_COLOR, role: `ms:${k}` });
+      endX = xm + d / 2;
+    }
+    // Milestone date and note to the right of the mark (or to the left if no room).
+    const extra = [r.kind === "milestone" && spec.milestoneDates ? shortDate(row.s, order) : "", r.note ?? ""].filter(Boolean).join("  ");
+    if (extra) {
+      const w = measure(extra, small) + 2;
+      const right = endX + pad + w <= tlRight;
+      const startX = r.kind === "milestone" ? x(row.s + 0.5) - Math.min(rowH * 0.72, msSize) / 2 : xa;
+      text({ x: right ? endX + pad : startX - pad - w, y: y0, w, h: rowH, text: extra, size: small, align: right ? "left" : "right", valign: "middle", role: `note:${k}` });
+    }
+  });
+
+  // ---- Today ----
+  const extras: Prim[] = [];
+  if (showToday) {
+    const xt = x(today + 0.5);
+    extras.push({ kind: "line", x1: xt, y1: bodyTop, x2: xt, y2: bodyBottom, color: TODAY_COLOR, width: 1, dash: true, role: "today" });
+    const w = measure("Today", small) + 2;
+    text({ x: xt - w / 2, y: bodyBottom + 1, w, h: small * 1.25, text: "Today", size: small, color: TODAY_COLOR, align: "center", valign: "top", role: "todaylbl" });
+  }
+
+  return { prims: [...grid, ...bars, ...extras, ...texts], warnings };
 }

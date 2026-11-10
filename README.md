@@ -3,8 +3,9 @@
 Consulting-style charts for PowerPoint (stacked, waterfall, Mekko, Gantt, …), drawn as native
 PowerPoint shapes. Built as an Office web add-in: works in PowerPoint for Mac, Windows and the web.
 
-**Status:** v0.3 — column and bar charts (stacked, clustered, 100%), line and combination charts,
-data sheet with paste from Excel, click-to-edit. Gantt/timeline arrives in v0.4.
+**Status:** v0.4 — column and bar charts (stacked, clustered, 100%), line and combination charts,
+Gantt/timeline (tasks, milestones, groups; weeks to years), data sheets with paste from Excel,
+click-to-edit.
 
 ## Privacy
 

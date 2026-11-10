@@ -1,5 +1,6 @@
 // Chart spec defaults, samples, migration and the house style.
 
+import { fromDay, isoDay, todayDay, toDay, type DateOrder } from "./dates";
 import type { CategorySpec, ChartSpec, GanttSpec, Mode, Style } from "./types";
 
 /** Option A: navy-to-light-blue ramp (from the template navy), greys after. */
@@ -54,6 +55,31 @@ export function sampleCategory(type: CategoryKind, mode: Mode): CategorySpec {
     ];
   }
   return base;
+}
+
+/** A two-phase project starting this month, so the sample always looks current. */
+export function sampleGantt(order: DateOrder, today = todayDay()): GanttSpec {
+  const { y, m } = fromDay(today);
+  const base = toDay(y, m, 1);
+  const d = (k: number) => isoDay(base + k);
+  return {
+    v: 2,
+    type: "gantt",
+    rows: [
+      { label: "Phase 1 – Diagnose", kind: "header", start: "", end: "" },
+      { label: "Interviews and data request", kind: "task", start: d(0), end: d(20) },
+      { label: "Baseline analysis", kind: "task", start: d(14), end: d(41) },
+      { label: "Steering committee 1", kind: "milestone", start: d(42), end: "" },
+      { label: "Phase 2 – Design", kind: "header", start: "", end: "" },
+      { label: "Option development", kind: "task", start: d(42), end: d(76) },
+      { label: "Business case", kind: "task", start: d(63), end: d(90) },
+      { label: "Final steering committee", kind: "milestone", start: d(91), end: "" },
+    ],
+    scale: "auto",
+    showToday: true,
+    milestoneDates: true,
+    dateOrder: order,
+  };
 }
 
 /** Upgrades older stored specs to the current version. */

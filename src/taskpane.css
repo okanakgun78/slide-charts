@@ -75,3 +75,11 @@ textarea { width: 100%; font: 11px/1.4 ui-monospace, Menlo, monospace; border: 1
 #preview figure { margin: 10px 0 0; }
 #preview figcaption { font-weight: 600; font-size: 12px; }
 #preview svg { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+
+table.sheet.gantt input.name { width: 150px; }
+table.sheet.gantt input.date { width: 86px; }
+table.sheet.gantt input.note { width: 90px; }
+table.sheet.gantt select { border: 0; background: transparent; font-size: 12px; }
+table.sheet.gantt tr.header input.name { font-weight: 700; }
+table.sheet input.bad { color: #b3261e; box-shadow: inset 0 -2px 0 #b3261e; }
+table.sheet input:disabled { background: #f6f7f9; }

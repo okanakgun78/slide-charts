@@ -2,15 +2,16 @@
 
 import { layoutCategory } from "./engine/category";
 import { canvasMeasure } from "./engine/measure";
-import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCategory } from "./engine/spec";
+import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCategory, sampleGantt } from "./engine/spec";
 import { toSvg } from "./engine/svg";
-import type { CategorySpec, Frame, Mode } from "./engine/types";
+import type { CategorySpec, ChartSpec, Frame, GanttSpec, Mode } from "./engine/types";
 import { FALLBACK_FONTS, runPilot, type ProbeResult } from "./ppt/probes";
 import {
   APP_VERSION, drawChart, errText, findSelectedChart, inkFor, readChart, readSlideBackground, redrawChart, TAG,
   type ChartRef,
 } from "./ppt/render";
 import { loadSettings, saveSettings, separators, styleFrom, type Settings } from "./ui/settings";
+import { GanttSheet } from "./ui/ganttSheet";
 import { Sheet } from "./ui/sheet";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -96,7 +97,33 @@ const sheet = new Sheet($("sheet"), {
   onChange: () => scheduleApply(),
 });
 
-function specFromEditor(): CategorySpec {
+const gsheet = new GanttSheet($("gsheet"), {
+  palette: () => PALETTE_A,
+  dateOrder: () => settings.dateOrder,
+  onChange: () => scheduleApply(),
+});
+
+function isGanttOpen() {
+  return state.ref?.stored.spec.type === "gantt";
+}
+
+function ganttFromEditor(): GanttSpec {
+  return {
+    v: 2,
+    type: "gantt",
+    rows: gsheet.data(),
+    scale: $<HTMLSelectElement>("g-scale").value as GanttSpec["scale"],
+    showToday: $<HTMLInputElement>("g-today").checked,
+    milestoneDates: $<HTMLInputElement>("g-msdates").checked,
+    dateOrder: settings.dateOrder,
+  };
+}
+
+function specFromEditor(): ChartSpec {
+  return isGanttOpen() ? ganttFromEditor() : categoryFromEditor();
+}
+
+function categoryFromEditor(): CategorySpec {
   const [type, mode] = $<HTMLSelectElement>("ed-type").value.split(":") as [CategorySpec["type"], Mode];
   const d = sheet.data();
   const dec = $<HTMLSelectElement>("ed-dec").value;
@@ -122,12 +149,17 @@ function openEditor(ref: ChartRef) {
   state.ref = ref;
   const spec = ref.stored.spec;
   $("editor").hidden = false;
+  $("ed-cat").hidden = spec.type === "gantt";
+  $("ed-gantt").hidden = spec.type !== "gantt";
+  $("ed-title").textContent = describe(spec);
   if (spec.type === "gantt") {
-    $("ed-title").textContent = "Gantt chart";
-    status("Gantt editing arrives in v0.4.");
+    $<HTMLSelectElement>("g-scale").value = spec.scale;
+    $<HTMLInputElement>("g-today").checked = spec.showToday;
+    $<HTMLInputElement>("g-msdates").checked = spec.milestoneDates;
+    gsheet.load(spec.rows);
+    status("");
     return;
   }
-  $("ed-title").textContent = describe(spec);
   $<HTMLSelectElement>("ed-type").value = `${spec.type}:${spec.type === "combo" && spec.mode === "percent" ? "stacked" : spec.type === "line" ? "stacked" : spec.mode}`;
   $<HTMLInputElement>("ed-values").checked = spec.labels.values;
   $<HTMLInputElement>("ed-totals").checked = spec.labels.totals;
@@ -186,7 +218,7 @@ async function apply() {
 
 // ---------- Insert ----------
 
-async function insertChart(type: CategorySpec["type"], mode: Mode) {
+async function insertChart(type: ChartSpec["type"], mode: Mode) {
   if (state.busy) return;
   state.busy = true;
   try {
@@ -209,7 +241,7 @@ async function insertChart(type: CategorySpec["type"], mode: Mode) {
       return { slideId: slides.items[0].id, frame };
     });
     await ensureCalibrated(target.slideId);
-    const spec = sampleCategory(type, mode);
+    const spec: ChartSpec = type === "gantt" ? sampleGantt(settings.dateOrder) : sampleCategory(type, mode);
     const r = await drawChart(target.slideId, spec, target.frame, await styleForSlide(target.slideId), measure());
     await PowerPoint.run(async (ctx) => {
       ctx.presentation.slides.getItem(target.slideId).setSelectedShapes([r.groupId]);
@@ -217,7 +249,8 @@ async function insertChart(type: CategorySpec["type"], mode: Mode) {
     });
     openEditor({ slideId: target.slideId, groupId: r.groupId, stored: r.stored, current: r.drawn });
     status("Inserted with sample data — paste or type yours below.");
-    sheet.focusCell(1, 1);
+    if (type === "gantt") gsheet.focusCell(1, "label");
+    else sheet.focusCell(1, 1);
   } catch (e) {
     toast(`Insert failed: ${errText(e)}`, 10000);
   } finally {
@@ -251,13 +284,20 @@ function onSelectionChanged() {
 function initSettings() {
   $<HTMLSelectElement>("set-font").value = String(settings.fontSize);
   $<HTMLSelectElement>("set-num").value = settings.numberFormat;
+  $<HTMLSelectElement>("set-dates").value = settings.dateOrder;
   $("set-palette").innerHTML = [...PALETTE_A, ...HIGHLIGHTS].map((c) => `<span class="chip" style="background:${c}" title="${c}"></span>`).join("");
   const onChange = () => {
     // Read the sheet with the old decimal separator before switching formats.
-    const data = state.ref ? sheet.data() : null;
+    const data = state.ref && !isGanttOpen() ? sheet.data() : null;
     settings.fontSize = Number($<HTMLSelectElement>("set-font").value);
     settings.numberFormat = $<HTMLSelectElement>("set-num").value as Settings["numberFormat"];
+    settings.dateOrder = $<HTMLSelectElement>("set-dates").value as Settings["dateOrder"];
     saveSettings(settings);
+    if (isGanttOpen()) {
+      gsheet.render(); // re-validate dates with the new order
+      scheduleApply(0);
+      return;
+    }
     if (data) {
       sheet.load(data); // re-render cells with the new decimal separator
       scheduleApply(0);
@@ -265,6 +305,7 @@ function initSettings() {
   };
   $("set-font").addEventListener("change", onChange);
   $("set-num").addEventListener("change", onChange);
+  $("set-dates").addEventListener("change", onChange);
 }
 
 // ---------- Diagnostics ----------
@@ -336,7 +377,7 @@ function showPreview() {
 function wire() {
   $("version").textContent = `v${APP_VERSION}`;
   document.querySelectorAll<HTMLButtonElement>("#insert .types button").forEach((b) =>
-    b.addEventListener("click", () => insertChart(b.dataset.type as CategorySpec["type"], b.dataset.mode as Mode)),
+    b.addEventListener("click", () => insertChart(b.dataset.type as ChartSpec["type"], b.dataset.mode as Mode)),
   );
   $("ed-type").addEventListener("change", () => {
     syncOptionStates();
@@ -349,6 +390,11 @@ function wire() {
   $("del-series").addEventListener("click", () => { const m = sheet.deleteSeries(); if (m) toast(m); });
   $("del-cat").addEventListener("click", () => { const m = sheet.deleteCategory(); if (m) toast(m); });
   $("transpose").addEventListener("click", () => sheet.transpose());
+  for (const id of ["g-scale", "g-today", "g-msdates"]) $(id).addEventListener("change", () => scheduleApply(0));
+  $("g-add").addEventListener("click", () => gsheet.addRow());
+  $("g-del").addEventListener("click", () => { const m = gsheet.deleteRow(); if (m) toast(m); });
+  $("g-up").addEventListener("click", () => gsheet.move(-1));
+  $("g-down").addEventListener("click", () => gsheet.move(1));
   $("run").addEventListener("click", onRunChecks);
   $("copy").addEventListener("click", onCopy);
   initSettings();

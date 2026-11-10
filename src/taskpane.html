@@ -21,6 +21,7 @@
       <h2 id="ed-title">Chart</h2>
       <span id="ed-status" class="muted"></span>
     </div>
+    <div id="ed-cat">
     <div class="row">
       <label>Type
         <select id="ed-type">
@@ -65,6 +66,31 @@
       <button id="transpose" class="secondary" title="Swap series and categories">⇄</button>
     </div>
     <p class="muted">Paste from Excel: copy a range with series names down the left and categories across the top, click the first data cell above, and paste. The chart updates as you type.</p>
+    </div>
+
+    <div id="ed-gantt" hidden>
+      <div class="row opts">
+        <label>Scale
+          <select id="g-scale">
+            <option value="auto">Auto</option>
+            <option value="week">Weeks</option>
+            <option value="month">Months</option>
+            <option value="quarter">Quarters</option>
+            <option value="year">Years</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="g-today" /> Today line</label>
+        <label><input type="checkbox" id="g-msdates" /> Milestone dates</label>
+      </div>
+      <div id="gsheet" class="sheetwrap"></div>
+      <div class="row tools">
+        <button id="g-add">+ Row</button>
+        <button id="g-del" class="secondary">− Row</button>
+        <button id="g-up" class="secondary" title="Move up">↑</button>
+        <button id="g-down" class="secondary" title="Move down">↓</button>
+      </div>
+      <p class="muted">Dates: 15/03/2026, 15 Mar 2026, Mar 2026, Q1 2027 or 2027 all work. Paste from Excel as Label | Start | End | Note into the first Label cell: rows without dates become groups, rows with only a start become milestones.</p>
+    </div>
   </section>
 
   <section id="insert">
@@ -78,7 +104,7 @@
       <button data-type="bar" data-mode="percent" title="100% bar">▤ 100% bar</button>
       <button data-type="line" data-mode="stacked" title="Line">⟋ Line</button>
       <button data-type="combo" data-mode="stacked" title="Columns with a line">▥⟋ Combination</button>
-      <button data-type="gantt" data-mode="stacked" title="Gantt / timeline" disabled>▬ Gantt (v0.4)</button>
+      <button data-type="gantt" data-mode="stacked" title="Gantt / timeline">▬ Gantt</button>
     </div>
     <p class="muted">To place a chart exactly, select a shape or placeholder first; the chart takes its position and size.</p>
   </section>
@@ -87,6 +113,12 @@
     <summary>Settings</summary>
     <div class="row">
       <label>Font size <select id="set-font"><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option></select></label>
+      <label>Dates
+        <select id="set-dates">
+          <option value="DMY">15/03/2026 (day first)</option>
+          <option value="MDY">03/15/2026 (month first)</option>
+        </select>
+      </label>
       <label>Numbers
         <select id="set-num">
           <option value="en">1,234.5</option>

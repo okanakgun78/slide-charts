@@ -168,6 +168,73 @@ try {
   assert.equal((await spec()).series[0].color, "#C00000");
   ok("series colour can be overridden (highlight red)");
 
+  // 13. Gantt: insert sample.
+  await page.evaluate(() => window.__select([]));
+  await settle(300);
+  await page.click('#insert button[data-type="gantt"]');
+  await settle();
+  s = await spec();
+  assert.equal(s.type, "gantt");
+  assert.equal(s.rows.length, 8);
+  assert.equal(await page.isVisible("#ed-gantt"), true);
+  assert.equal(await page.isVisible("#ed-cat"), false);
+  let g = (await charts()).at(-1);
+  assert.ok(g.children.some((k) => k.geom === "Diamond"), "milestone diamonds");
+  assert.ok(g.children.some((k) => k.type === "Line" && k.line?.dash === "Dash"), "today line");
+  ok("insert Gantt: sample plan with groups, milestones and a today line");
+
+  // 14. Type a period as an end date.
+  await page.fill('#gsheet input[data-r="6"][data-c="end"]', "Q2 2027");
+  await settle();
+  s = await spec();
+  assert.equal(s.rows[6].end, "Q2 2027");
+  g = (await charts()).at(-1);
+  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text === "Jun"), `month scale after extending the plan: ${g.children.filter((k) => k.type === "TextBox").map((k) => k.text).slice(0, 12)}`);
+  ok("typing 'Q2 2027' as an end date extends the plan to 30 Jun 2027 (weeks switch to months)");
+
+  // 15. Paste a schedule from Excel with a title row.
+  await page.focus('#gsheet input[data-r="0"][data-c="label"]');
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "Task\tStart\tEnd\tOwner\r\nPhase A\t\t\t\r\nDesign\t01/02/2027\t28/02/2027\tOA\r\nBuild\t01/03/2027\t30/04/2027\t\r\nLaunch\t15/05/2027\t\t\r\n");
+    document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await settle();
+  s = await spec();
+  assert.deepEqual(s.rows.map((r) => [r.label, r.kind]), [["Phase A", "header"], ["Design", "task"], ["Build", "task"], ["Launch", "milestone"]]);
+  assert.equal(s.rows[1].note, "OA");
+  ok("paste schedule from Excel: title row skipped, groups/tasks/milestones inferred, note kept");
+
+  // 16. Unreadable date: flagged in the sheet and reported, chart still drawn.
+  await page.fill('#gsheet input[data-r="2"][data-c="end"]', "sometime");
+  await settle();
+  assert.equal(await page.locator('#gsheet input[data-r="2"][data-c="end"].bad').count(), 1);
+  const st = await page.textContent("#ed-status");
+  assert.match(st, /not recognised/, `status was: "${st}"`);
+  await page.fill('#gsheet input[data-r="2"][data-c="end"]', "30/04/2027");
+  await settle();
+  ok("unreadable dates are flagged in red and reported");
+
+  // 17. Day/month order setting.
+  await page.selectOption("#set-dates", "MDY");
+  await page.fill('#gsheet input[data-r="3"][data-c="start"]', "06/05/2027");
+  await settle();
+  g = (await charts()).at(-1);
+  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text === "Jun 5"), `MDY milestone label: ${g.children.filter((k) => k.type === "TextBox").map((k) => k.text)}`);
+  await page.selectOption("#set-dates", "DMY");
+  await settle();
+  ok("date order setting: 06/05/2027 reads as June 5 in month-first mode");
+
+  // 18. Move and delete rows.
+  await page.focus('#gsheet input[data-r="3"][data-c="label"]');
+  await page.click("#g-up");
+  await settle();
+  assert.equal((await spec()).rows[2].label, "Launch");
+  await page.click("#g-del");
+  await settle();
+  assert.equal((await spec()).rows.length, 3);
+  ok("move row up and delete row");
+
   assert.deepEqual(await errors(), [], "no Office.js errors");
   assert.deepEqual(pageErrors, [], "no page errors");
   ok("no Office.js or page errors");
@@ -201,7 +268,8 @@ function renderDeck(d) {
       const fs = s.font?.size || 12;
       const y = s.tf?.valign === "Top" ? s.top + fs : s.tf?.valign === "Bottom" ? s.top + s.height - fs * 0.25 : cy + fs * 0.35;
       els.push(`<text x="${x}" y="${y}" font-size="${fs}" fill="${s.font?.color || "#000"}" text-anchor="${a}" font-family="Helvetica" ${s.font?.bold ? 'font-weight="bold"' : ""}>${String(s.text).replace(/</g, "&lt;")}</text>`);
-    } else if (s.geom === "Ellipse") els.push(`<ellipse cx="${cx}" cy="${cy}" rx="${s.width / 2}" ry="${s.height / 2}" fill="${s.fill || "none"}"/>`);
+    } else if (s.geom === "Diamond") els.push(`<polygon points="${cx},${s.top} ${s.left + s.width},${cy} ${cx},${s.top + s.height} ${s.left},${cy}" fill="${s.fill || "none"}"/>`);
+    else if (s.geom === "Ellipse") els.push(`<ellipse cx="${cx}" cy="${cy}" rx="${s.width / 2}" ry="${s.height / 2}" fill="${s.fill || "none"}"/>`);
     else if (s.tags !== undefined && s.id === "ph1") els.push(`<rect x="${s.left}" y="${s.top}" width="${s.width}" height="${s.height}" fill="none" stroke="#bbb" stroke-dasharray="3 3"/>`);
     else els.push(`<rect x="${s.left}" y="${s.top}" width="${s.width}" height="${s.height}" fill="${s.fill || "none"}"${rot}/>`);
   };

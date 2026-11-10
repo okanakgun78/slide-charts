@@ -1,16 +1,19 @@
 // User settings, kept in this computer's browser storage for the add-in.
 
 import { defaultStyle } from "../engine/spec";
+import { localeOrder } from "../engine/dates";
 import type { Style } from "../engine/types";
 
 export interface Settings {
   fontSize: number;
   /** en: 1,234.5   eu: 1.234,5   space: 1 234,5 */
   numberFormat: "en" | "eu" | "space";
+  /** How to read ambiguous dates like 04/05/2026. */
+  dateOrder: "DMY" | "MDY";
 }
 
 const KEY = "slidecharts.settings.v1";
-const DEFAULTS: Settings = { fontSize: 12, numberFormat: "en" };
+const DEFAULTS: Settings = { fontSize: 12, numberFormat: "en", dateOrder: localeOrder() };
 
 export function loadSettings(): Settings {
   try {
