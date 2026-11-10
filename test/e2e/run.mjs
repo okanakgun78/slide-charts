@@ -189,7 +189,7 @@ try {
   s = await spec();
   assert.equal(s.rows[6].end, "Q2 2027");
   g = (await charts()).at(-1);
-  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text === "Jun"), `month scale after extending the plan: ${g.children.filter((k) => k.type === "TextBox").map((k) => k.text).slice(0, 12)}`);
+  assert.ok(g.children.some((k) => k.type === "TextBox" && /^June?$/.test(k.text)), `month scale after extending the plan: ${g.children.filter((k) => k.type === "TextBox").map((k) => k.text).slice(0, 12)}`);
   ok("typing 'Q2 2027' as an end date extends the plan to 30 Jun 2027 (weeks switch to months)");
 
   // 15. Paste a schedule from Excel with a title row.
@@ -234,6 +234,33 @@ try {
   await settle();
   assert.equal((await spec()).rows.length, 3);
   ok("move row up and delete row");
+
+  // 19. Sample-style timeline: Month + Day tiers, filled header, then plain.
+  await page.focus('#gsheet input[data-r="0"][data-c="label"]');
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "Recovery\t02/11/2026\t02/11/2026\r\nRuns\t03/11/2026\t07/11/2026\r\nLong run\t08/11/2026\t\r\n");
+    document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await settle();
+  await page.check('#ed-gantt input.g-tier[value="month"]');
+  await page.check('#ed-gantt input.g-tier[value="day"]');
+  await settle();
+  s = await spec();
+  assert.deepEqual(s.tiers, ["month", "day"]);
+  assert.equal(await page.isChecked("#g-auto"), false);
+  g = (await charts()).at(-1);
+  const tx = g.children.filter((k) => k.type === "TextBox").map((k) => k.text);
+  for (const want of ["November", "02", "Mon", "08", "Sun"]) assert.ok(tx.includes(want), `header has ${want}: ${tx.slice(0, 20)}`);
+  const cells = g.children.filter((k) => k.type === "GeometricShape" && k.fill === "#003760" && k.line?.color === "#FFFFFF");
+  assert.equal(cells.length, 8, "1 month cell + 7 day cells, filled navy with white borders");
+  await page.selectOption("#g-hstyle", "plain");
+  await settle();
+  g = (await charts()).at(-1);
+  assert.equal(g.children.filter((k) => k.line?.color === "#FFFFFF").length, 0, "plain header has no filled cells");
+  await page.selectOption("#g-hstyle", "filled");
+  await settle();
+  ok("timeline tiers: Month + Day gives the sample's 'November / 02 Mon' header; Plain style switches it off");
 
   assert.deepEqual(await errors(), [], "no Office.js errors");
   assert.deepEqual(pageErrors, [], "no page errors");

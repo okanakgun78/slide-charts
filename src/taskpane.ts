@@ -4,7 +4,7 @@ import { layoutCategory } from "./engine/category";
 import { canvasMeasure } from "./engine/measure";
 import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCategory, sampleGantt } from "./engine/spec";
 import { toSvg } from "./engine/svg";
-import type { CategorySpec, ChartSpec, Frame, GanttSpec, Mode } from "./engine/types";
+import type { CategorySpec, ChartSpec, Frame, GanttSpec, GanttTier, Mode } from "./engine/types";
 import { FALLBACK_FONTS, runPilot, type ProbeResult } from "./ppt/probes";
 import {
   APP_VERSION, drawChart, errText, findSelectedChart, inkFor, readChart, readSlideBackground, redrawChart, TAG,
@@ -112,11 +112,27 @@ function ganttFromEditor(): GanttSpec {
     v: 2,
     type: "gantt",
     rows: gsheet.data(),
-    scale: $<HTMLSelectElement>("g-scale").value as GanttSpec["scale"],
+    tiers: selectedTiers(),
+    headerStyle: $<HTMLSelectElement>("g-hstyle").value as GanttSpec["headerStyle"],
+    headerColor: $<HTMLSelectElement>("g-hcolor").value || undefined,
+    shadeWeekends: $<HTMLInputElement>("g-weekends").checked,
     showToday: $<HTMLInputElement>("g-today").checked,
     milestoneDates: $<HTMLInputElement>("g-msdates").checked,
     dateOrder: settings.dateOrder,
   };
+}
+
+const tierBoxes = () => Array.from(document.querySelectorAll<HTMLInputElement>("#ed-gantt input.g-tier"));
+
+function selectedTiers(): GanttSpec["tiers"] {
+  if ($<HTMLInputElement>("g-auto").checked) return "auto";
+  const t = tierBoxes().filter((b) => b.checked).map((b) => b.value as GanttTier);
+  return t.length ? t : "auto";
+}
+
+function showTiers(t: GanttSpec["tiers"]) {
+  $<HTMLInputElement>("g-auto").checked = t === "auto";
+  tierBoxes().forEach((b) => (b.checked = t !== "auto" && t.includes(b.value as GanttTier)));
 }
 
 function specFromEditor(): ChartSpec {
@@ -153,7 +169,10 @@ function openEditor(ref: ChartRef) {
   $("ed-gantt").hidden = spec.type !== "gantt";
   $("ed-title").textContent = describe(spec);
   if (spec.type === "gantt") {
-    $<HTMLSelectElement>("g-scale").value = spec.scale;
+    showTiers(spec.tiers);
+    $<HTMLSelectElement>("g-hstyle").value = spec.headerStyle;
+    $<HTMLSelectElement>("g-hcolor").value = spec.headerColor ?? "";
+    $<HTMLInputElement>("g-weekends").checked = spec.shadeWeekends;
     $<HTMLInputElement>("g-today").checked = spec.showToday;
     $<HTMLInputElement>("g-msdates").checked = spec.milestoneDates;
     gsheet.load(spec.rows);
@@ -390,7 +409,16 @@ function wire() {
   $("del-series").addEventListener("click", () => { const m = sheet.deleteSeries(); if (m) toast(m); });
   $("del-cat").addEventListener("click", () => { const m = sheet.deleteCategory(); if (m) toast(m); });
   $("transpose").addEventListener("click", () => sheet.transpose());
-  for (const id of ["g-scale", "g-today", "g-msdates"]) $(id).addEventListener("change", () => scheduleApply(0));
+  for (const id of ["g-today", "g-msdates", "g-hstyle", "g-hcolor", "g-weekends"]) $(id).addEventListener("change", () => scheduleApply(0));
+  $("g-auto").addEventListener("change", () => {
+    if ($<HTMLInputElement>("g-auto").checked) tierBoxes().forEach((b) => (b.checked = false));
+    else if (!tierBoxes().some((b) => b.checked)) $<HTMLInputElement>("g-auto").checked = true;
+    scheduleApply(0);
+  });
+  tierBoxes().forEach((b) => b.addEventListener("change", () => {
+    $<HTMLInputElement>("g-auto").checked = !tierBoxes().some((x) => x.checked);
+    scheduleApply(0);
+  }));
   $("g-add").addEventListener("click", () => gsheet.addRow());
   $("g-del").addEventListener("click", () => { const m = gsheet.deleteRow(); if (m) toast(m); });
   $("g-up").addEventListener("click", () => gsheet.move(-1));

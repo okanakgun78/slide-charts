@@ -12,7 +12,7 @@ import { migrate } from "../engine/spec";
 import type { Align, ChartSpec, Frame, Layout, Measure, Prim, Style, VAlign } from "../engine/types";
 
 export const TAG = "SLIDECHARTS";
-export const APP_VERSION = "0.4.0";
+export const APP_VERSION = "0.5.0";
 /** Thickness used instead of 0 for horizontal/vertical line boxes (points). */
 export const LINE_EPS = 0.01;
 

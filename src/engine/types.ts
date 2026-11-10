@@ -111,11 +111,22 @@ export interface GanttRow {
   note?: string;
 }
 
+export type GanttTier = "year" | "quarter" | "month" | "week" | "day";
+
 export interface GanttSpec {
   v: 2;
   type: "gantt";
   rows: GanttRow[];
-  scale: "auto" | "week" | "month" | "quarter" | "year";
+  /** Header tiers to show (finest one sets the grid), or "auto" from the plan's span. */
+  tiers: GanttTier[] | "auto";
+  /** "filled": solid header cells with white text (user's sample); "plain": text only. */
+  headerStyle: "filled" | "plain";
+  /** Header cell colour; palette navy when omitted. */
+  headerColor?: string;
+  /** Grey Saturday/Sunday columns when the grid is in days. */
+  shadeWeekends: boolean;
+  /** v0.4 setting, replaced by `tiers` (kept for reading old charts). */
+  scale?: "auto" | "week" | "month" | "quarter" | "year";
   showToday: boolean;
   /** Show the date next to milestones. */
   milestoneDates: boolean;

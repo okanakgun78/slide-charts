@@ -1,68 +1,111 @@
 // Gantt / timeline layout.
 // Rows: tasks (bars), milestones (diamonds) and group headers (bold label + summary bar over the
-// rows below it, up to the next header). Time scale is chosen from the span (weeks, months,
-// quarters or years) with a two-tier header (e.g. months under years).
+// rows below it, up to the next header). The timeline header stacks any combination of tiers
+// (year, quarter, month, week, day); the finest tier sets the grid. "Filled" headers follow the
+// user's sample: solid cells, white bold text, white separators, days as "02 / Mon".
 
 import { fromDay, monthName, parseDate, shortDate, todayDay, toDay } from "./dates";
-import type { Frame, GanttSpec, Layout, LinePrim, Measure, Prim, RectPrim, ShapePrim, Style, TextPrim } from "./types";
+import type { Frame, GanttSpec, GanttTier, Layout, LinePrim, Measure, Prim, RectPrim, ShapePrim, Style, TextPrim } from "./types";
 
 export const MILESTONE_COLOR = "#CD9700";
 const TODAY_COLOR = "#C00000";
+export const TIER_ORDER: GanttTier[] = ["year", "quarter", "month", "week", "day"];
+const MONTH_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const WEEKDAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-type Scale = Exclude<GanttSpec["scale"], "auto">;
-
-interface Period { start: number; end: number; label: string; short: string }
-
-export function pickScale(spanDays: number): Scale {
-  return spanDays <= 120 ? "week" : spanDays <= 450 ? "month" : spanDays <= 1830 ? "quarter" : "year";
+export interface Period {
+  start: number;
+  end: number;
+  /** Single-line label candidates, longest first. */
+  labels: string[];
+  /** Two-line label candidates (day cells: "02" over "Mon"), longest first. */
+  lines?: [string, string][];
 }
 
-/** Bottom-tier periods covering [lo, hi] and the top-tier groups above them. */
-export function periods(lo: number, hi: number, scale: Scale): { bottom: Period[]; top: Period[] } {
-  const bottom: Period[] = [];
-  const top: Period[] = [];
-  const pushTop = (start: number, end: number, label: string, short: string) => {
-    const last = top[top.length - 1];
-    if (last && last.label === label) last.end = end;
-    else top.push({ start, end, label, short });
-  };
-  if (scale === "week") {
-    let d = lo - fromDay(lo).wd; // Monday
-    while (d <= hi) {
-      const { y, m, d: dd } = fromDay(d);
-      bottom.push({ start: d, end: d + 6, label: String(dd), short: String(dd) });
-      pushTop(d, d + 6, `${monthName(m)} ${y}`, monthName(m));
-      d += 7;
-    }
-  } else if (scale === "month" || scale === "quarter") {
-    const step = scale === "month" ? 1 : 3;
-    const f = fromDay(lo);
-    let y = f.y, m = scale === "month" ? f.m : Math.floor((f.m - 1) / 3) * 3 + 1;
-    for (;;) {
-      const start = toDay(y, m, 1);
-      if (start > hi) break;
-      const ny = m + step > 12 ? y + 1 : y, nm = ((m + step - 1) % 12) + 1;
-      const end = toDay(ny, nm, 1) - 1;
-      const label = scale === "month" ? monthName(m) : `Q${(m + 2) / 3}`;
-      bottom.push({ start, end, label, short: scale === "month" ? label[0] : label });
-      pushTop(start, end, String(y), `'${String(y).slice(2)}`);
-      y = ny; m = nm;
-    }
-  } else {
-    for (let y = fromDay(lo).y; toDay(y, 1, 1) <= hi; y++) {
-      bottom.push({ start: toDay(y, 1, 1), end: toDay(y, 12, 31), label: String(y), short: `'${String(y).slice(2)}` });
-    }
+/** Tiers chosen automatically from the plan's span (days). */
+export function autoTiers(span: number): GanttTier[] {
+  return span <= 31 ? ["month", "day"] : span <= 120 ? ["month", "week"] : span <= 450 ? ["year", "month"] : span <= 1830 ? ["year", "quarter"] : ["year"];
+}
+
+export function resolveTiers(spec: Pick<GanttSpec, "tiers">, span: number): GanttTier[] {
+  const t = spec.tiers === "auto" || !spec.tiers?.length ? autoTiers(span) : spec.tiers;
+  return TIER_ORDER.filter((k) => t.includes(k));
+}
+
+/** First day of the period of `tier` that contains day `d`. */
+export function periodStart(d: number, tier: GanttTier): number {
+  const { y, m, wd } = fromDay(d);
+  switch (tier) {
+    case "day": return d;
+    case "week": return d - wd;
+    case "month": return toDay(y, m, 1);
+    case "quarter": return toDay(y, Math.floor((m - 1) / 3) * 3 + 1, 1);
+    case "year": return toDay(y, 1, 1);
   }
-  return { bottom, top };
+}
+
+/** Last day of the period of `tier` that starts at `start`. */
+function periodEnd(start: number, tier: GanttTier): number {
+  const { y, m } = fromDay(start);
+  switch (tier) {
+    case "day": return start;
+    case "week": return start + 6;
+    case "month": return toDay(m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1, 1) - 1;
+    case "quarter": { const nm = m + 3; return toDay(nm > 12 ? y + 1 : y, nm > 12 ? nm - 12 : nm, 1) - 1; }
+    case "year": return toDay(y + 1, 1, 1) - 1;
+  }
+}
+
+/** ISO 8601 week number of a day. */
+export function isoWeek(d: number): number {
+  const thursday = d - fromDay(d).wd + 3;
+  const jan1 = toDay(fromDay(thursday).y, 1, 1);
+  return Math.floor((thursday - jan1) / 7) + 1;
+}
+
+/** Periods of one tier covering [t0, t1) — clipped to the range — with label candidates. */
+export function tierPeriods(t0: number, t1: number, tier: GanttTier, ctx: { tiers: GanttTier[]; multiYear: boolean }): Period[] {
+  const out: Period[] = [];
+  const hasYear = ctx.tiers.includes("year");
+  const hasMonth = ctx.tiers.includes("month");
+  const hasDay = ctx.tiers.includes("day");
+  for (let p = periodStart(t0, tier); p < t1; p = periodEnd(p, tier) + 1) {
+    const { y, m, d, wd } = fromDay(p);
+    const yy = `'${String(y).slice(2)}`;
+    let labels: string[];
+    let lines: [string, string][] | undefined;
+    switch (tier) {
+      case "year": labels = [String(y), yy]; break;
+      case "quarter": { const q = `Q${Math.floor((m - 1) / 3) + 1}`; labels = hasYear ? [q] : [`${q} ${y}`, `${q} ${yy}`, q]; break; }
+      case "month": {
+        const full = MONTH_FULL[m - 1], short = monthName(m);
+        labels = hasYear || !ctx.multiYear ? [full, short, short[0]] : [`${full} ${y}`, `${short} ${y}`, `${short} ${yy}`, short, short[0]];
+        break;
+      }
+      // With a day row below, week numbers (W45) say more than repeating the Monday's date.
+      case "week": labels = hasDay ? [`Week ${isoWeek(p)}`, `W${isoWeek(p)}`, String(isoWeek(p))] : hasMonth ? [String(d)] : [`${d} ${monthName(m)}`, String(d)]; break;
+      case "day":
+        lines = [[String(d).padStart(2, "0"), WEEKDAY[wd]], [String(d), WEEKDAY[wd][0]]];
+        labels = [String(d).padStart(2, "0"), String(d), WEEKDAY[wd][0]];
+        break;
+    }
+    const clipped = p < t0 || periodEnd(p, tier) > t1 - 1;
+    // A period cut short by the plan's start or end gets no cryptic one-letter label.
+    if (clipped && tier !== "day") labels = labels.filter((l) => l.length > 1);
+    out.push({ start: Math.max(p, t0), end: Math.min(periodEnd(p, tier), t1 - 1), labels, lines });
+  }
+  return out;
 }
 
 export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure: Measure, today = todayDay()): Layout {
   const warnings: string[] = [];
   const fs = style.fontSize;
   const small = Math.round(fs * 0.85 * 2) / 2;
-  const lineH = fs * 1.3;
   const pad = fs * 0.4;
   const order = spec.dateOrder;
+  const filled = spec.headerStyle !== "plain";
+  const headFill = spec.headerColor ?? style.palette[0];
+  const headInk = filled ? "#FFFFFF" : style.textColor;
 
   // ---- Parse rows ----
   const rows = spec.rows.map((r) => {
@@ -86,10 +129,15 @@ export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure
   if (!dated.length) return { prims: [], warnings: [...warnings, "Enter start and end dates"] };
   const lo = Math.min(...dated.map((x) => x.s!));
   const hi = Math.max(...dated.map((x) => x.e!));
-  const scale: Scale = spec.scale === "auto" ? pickScale(hi - lo + 1) : spec.scale;
-  const { bottom, top } = periods(lo, hi, scale);
-  const t0 = bottom[0].start;
-  const t1 = bottom[bottom.length - 1].end + 1;
+
+  // ---- Timeline range and tiers ----
+  const tiers = resolveTiers(spec, hi - lo + 1);
+  const finest = tiers[tiers.length - 1];
+  const t0 = finest === "day" ? lo : periodStart(lo, finest);
+  const t1 = periodEnd(periodStart(hi, finest), finest) + 1;
+  if (finest === "day" && t1 - t0 > 370) warnings.push("Day columns over more than a year are too narrow to label");
+  const multiYear = fromDay(t0).y !== fromDay(t1 - 1).y;
+  const tierPs = tiers.map((t) => tierPeriods(t0, t1, t, { tiers, multiYear }));
 
   // ---- Horizontal layout ----
   const grouped = rows.some((x) => x.r.kind === "header");
@@ -104,9 +152,15 @@ export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure
   const tlRight = frame.left + frame.width - (rows.some((r) => r.r.kind === "milestone") ? msSize / 2 : 0);
   const x = (d: number) => tlLeft + ((d - t0) / (t1 - t0)) * (tlRight - tlLeft);
 
+  // ---- Header tier heights: day cells use two lines ("02" over "Mon") when they fit ----
+  const one = filled ? fs * 1.6 : fs * 1.3;
+  const dayIdx = tiers.indexOf("day");
+  const dayW = dayIdx >= 0 ? x(t0 + 1) - x(t0) : 0;
+  const twoLine = dayIdx >= 0 && measure("Wed", fs, true) <= dayW - 2 && measure("00", fs, true) <= dayW - 2;
+  const tierH = tiers.map((t) => (t === "day" && twoLine ? (filled ? fs * 2.75 : fs * 2.5) : one));
+  const headerH = tierH.reduce((a, b) => a + b, 0) + (filled ? 0 : pad * 0.5);
+
   // ---- Vertical layout ----
-  const tiers = scale === "year" ? 1 : 2;
-  const headerH = tiers * lineH + pad * 0.5;
   const showToday = spec.showToday && today >= t0 && today < t1;
   const footH = showToday ? small * 1.3 : 0;
   const avail = frame.height - headerH - footH;
@@ -117,31 +171,56 @@ export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure
   const bodyTop = frame.top + headerH;
   const bodyBottom = bodyTop + rowH * n;
 
+  const shading: RectPrim[] = [];
   const grid: LinePrim[] = [];
+  const head: RectPrim[] = [];
   const bars: (RectPrim | ShapePrim)[] = [];
   const texts: TextPrim[] = [];
   const text = (t: Omit<TextPrim, "kind" | "size" | "color"> & { size?: number; color?: string }) =>
     texts.push({ kind: "text", size: fs, color: style.textColor, ...t });
 
-  // ---- Header and grid ----
-  const tierY = (k: number) => frame.top + k * lineH;
-  if (tiers === 2) {
-    top.forEach((p, k) => {
-      const a = x(Math.max(p.start, t0)), b = x(Math.min(p.end + 1, t1));
-      const label = measure(p.label, fs, true) <= b - a - 4 ? p.label : measure(p.short, fs, true) <= b - a - 4 ? p.short : "";
-      if (label) text({ x: a, y: tierY(0), w: b - a, h: lineH, text: label, bold: true, align: "center", valign: "middle", role: `top:${k}` });
-      if (k > 0) grid.push({ kind: "line", x1: a, y1: frame.top, x2: a, y2: bodyBottom, color: style.axisColor, width: 0.75, role: `topgrid:${k}` });
+  // ---- Header ----
+  let ty = frame.top;
+  tiers.forEach((tier, ti) => {
+    const h = tierH[ti];
+    const finestTier = ti === tiers.length - 1;
+    tierPs[ti].forEach((p, k) => {
+      const a = x(p.start), b = x(p.end + 1), w = b - a;
+      if (filled) head.push({ kind: "rect", x: a, y: ty, w, h, fill: headFill, stroke: "#FFFFFF", strokeWidth: 0.75, role: `hd:${tier}:${k}` });
+      else if (k > 0) grid.push({ kind: "line", x1: a, y1: ty, x2: a, y2: ty + h, color: style.gridColor, width: 0.5, role: `hdl:${tier}:${k}` });
+      const size = filled || !finestTier || tiers.length === 1 ? fs : small;
+      const bold = filled || !finestTier || tiers.length === 1;
+      if (tier === "day" && twoLine && p.lines) {
+        const pair = p.lines.find(([l1, l2]) => measure(l1, size, bold) <= w - 2 && measure(l2, size, bold) <= w - 2);
+        if (pair) {
+          text({ x: a, y: ty, w, h: h / 2, text: pair[0], size, bold, color: headInk, align: "center", valign: "bottom", role: `hdt:${tier}:${k}:1` });
+          text({ x: a, y: ty + h / 2, w, h: h / 2, text: pair[1], size, bold, color: headInk, align: "center", valign: "top", role: `hdt:${tier}:${k}:2` });
+          return;
+        }
+      }
+      const label = p.labels.find((l) => measure(l, size, bold) <= w - 3);
+      if (label) text({ x: a, y: ty, w, h, text: label, size, bold, color: headInk, align: "center", valign: "middle", role: `hdt:${tier}:${k}` });
     });
-  }
-  bottom.forEach((p, k) => {
-    const a = x(p.start), b = x(p.end + 1);
-    const hs = tiers === 2 ? small : fs;
-    const label = measure(p.label, hs) <= b - a - 2 ? p.label : measure(p.short, hs) <= b - a - 2 ? p.short : "";
-    if (label) text({ x: a, y: tierY(tiers - 1), w: b - a, h: lineH, text: label, size: hs, bold: tiers === 1, align: "center", valign: "middle", role: `per:${k}` });
-    if (k > 0) grid.push({ kind: "line", x1: a, y1: tierY(tiers - 1), x2: a, y2: bodyBottom, color: style.gridColor, width: 0.5, role: `grid:${k}` });
+    ty += h;
   });
-  grid.push({ kind: "line", x1: frame.left, y1: bodyTop, x2: tlRight, y2: bodyTop, color: style.axisColor, width: 0.75, role: "headline" });
+  if (!filled) grid.push({ kind: "line", x1: frame.left, y1: bodyTop, x2: tlRight, y2: bodyTop, color: style.axisColor, width: 0.75, role: "headline" });
+
+  // ---- Body grid: finest-tier lines, stronger lines where the coarsest tier changes ----
+  const coarse = new Set(tiers.length > 1 ? tierPs[0].slice(1).map((p) => p.start) : []);
+  tierPs[tierPs.length - 1].forEach((p, k) => {
+    if (k === 0) return;
+    const a = x(p.start);
+    const strong = coarse.has(p.start);
+    grid.push({ kind: "line", x1: a, y1: bodyTop, x2: a, y2: bodyBottom, color: strong ? style.axisColor : style.gridColor, width: strong ? 0.75 : 0.5, role: `grid:${k}` });
+  });
   grid.push({ kind: "line", x1: frame.left, y1: bodyBottom, x2: tlRight, y2: bodyBottom, color: style.axisColor, width: 0.75, role: "footline" });
+
+  // ---- Weekend shading (day grid) ----
+  if (finest === "day" && spec.shadeWeekends && style.textColor !== "#FFFFFF") {
+    for (let d = t0; d < t1; d++) {
+      if (fromDay(d).wd >= 5) shading.push({ kind: "rect", x: x(d), y: bodyTop, w: x(d + 1) - x(d), h: bodyBottom - bodyTop, fill: "#F2F2F2", role: `wkend:${d}` });
+    }
+  }
 
   // ---- Rows ----
   const barH = rowH * 0.5;
@@ -185,5 +264,5 @@ export function layoutGantt(spec: GanttSpec, frame: Frame, style: Style, measure
     text({ x: xt - w / 2, y: bodyBottom + 1, w, h: small * 1.25, text: "Today", size: small, color: TODAY_COLOR, align: "center", valign: "top", role: "todaylbl" });
   }
 
-  return { prims: [...grid, ...bars, ...extras, ...texts], warnings };
+  return { prims: [...shading, ...grid, ...head, ...bars, ...extras, ...texts], warnings };
 }

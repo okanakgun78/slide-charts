@@ -30,6 +30,9 @@ tests and deploys (`.github/workflows/deploy.yml`). Updates reach the user on re
 - First data-sheet row = top segment in columns (think-cell); first series leftmost in bars.
 - Palette A: navy ramp `#003760 → #BFD0E2`, greys, highlights gold `#CD9700` / red `#C00000`.
 - No value axis; labels inside segments, totals at stack ends, series names right or legend on top.
+- Gantt header: any combination of tiers (year/quarter/month/week/day, or auto); finest tier sets the
+  grid. Default "filled" style follows the user's sample slide (solid navy cells, white bold text,
+  white separators, days as "02 / Mon"); weeks show ISO numbers when days are shown.
 
 ## Commands
 - `npm test` (vitest, engine + parsing), `npx tsc` (types against @types/office-js),

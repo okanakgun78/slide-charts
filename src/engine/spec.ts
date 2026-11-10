@@ -75,7 +75,9 @@ export function sampleGantt(order: DateOrder, today = todayDay()): GanttSpec {
       { label: "Business case", kind: "task", start: d(63), end: d(90) },
       { label: "Final steering committee", kind: "milestone", start: d(91), end: "" },
     ],
-    scale: "auto",
+    tiers: "auto",
+    headerStyle: "filled",
+    shadeWeekends: true,
     showToday: true,
     milestoneDates: true,
     dateOrder: order,
@@ -95,6 +97,13 @@ export function migrate(raw: unknown): ChartSpec {
       labels: { values: true, totals: s.showTotals !== false, legend: "auto" },
       decimals: typeof s.decimals === "number" ? s.decimals : null,
     };
+  }
+  if (s && s.type === "gantt" && !("tiers" in s)) {
+    const g = s as unknown as GanttSpec;
+    const map: Record<string, GanttSpec["tiers"]> = {
+      auto: "auto", week: ["month", "week"], month: ["year", "month"], quarter: ["year", "quarter"], year: ["year"],
+    };
+    return { ...g, tiers: map[g.scale ?? "auto"] ?? "auto", headerStyle: "filled", shadeWeekends: true };
   }
   return s as unknown as ChartSpec;
 }

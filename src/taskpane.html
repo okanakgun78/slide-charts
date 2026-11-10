@@ -70,15 +70,31 @@
 
     <div id="ed-gantt" hidden>
       <div class="row opts">
-        <label>Scale
-          <select id="g-scale">
-            <option value="auto">Auto</option>
-            <option value="week">Weeks</option>
-            <option value="month">Months</option>
-            <option value="quarter">Quarters</option>
-            <option value="year">Years</option>
+        <span class="muted">Timeline:</span>
+        <label><input type="checkbox" id="g-auto" /> Auto</label>
+        <label><input type="checkbox" class="g-tier" value="year" /> Year</label>
+        <label><input type="checkbox" class="g-tier" value="quarter" /> Quarter</label>
+        <label><input type="checkbox" class="g-tier" value="month" /> Month</label>
+        <label><input type="checkbox" class="g-tier" value="week" /> Week</label>
+        <label><input type="checkbox" class="g-tier" value="day" /> Day</label>
+      </div>
+      <div class="row opts">
+        <label>Header
+          <select id="g-hstyle">
+            <option value="filled">Filled</option>
+            <option value="plain">Plain</option>
           </select>
         </label>
+        <label>Colour
+          <select id="g-hcolor">
+            <option value="">Navy</option>
+            <option value="#2E5B85">Blue</option>
+            <option value="#066BB0">Bright blue</option>
+            <option value="#7F7F7F">Grey</option>
+            <option value="#CD9700">Gold</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="g-weekends" /> Shade weekends</label>
         <label><input type="checkbox" id="g-today" /> Today line</label>
         <label><input type="checkbox" id="g-msdates" /> Milestone dates</label>
       </div>
