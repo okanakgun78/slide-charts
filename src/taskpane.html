@@ -10,37 +10,105 @@
 <body>
   <header>
     <h1>Slide Charts</h1>
-    <span class="tag">Pilot</span>
+    <span class="tag" id="version"></span>
   </header>
 
-  <div id="not-office" class="notice" hidden>
-    Open this inside PowerPoint. Below is a preview of the sample chart the pilot draws.
-  </div>
+  <div id="not-office" class="notice" hidden>Open this inside PowerPoint to use it. Below is a preview of every chart type.</div>
+  <div id="toast" class="toast" hidden></div>
 
-  <section>
-    <h2>1 · Run the pilot checks</h2>
-    <p>Adds a test slide at the end of this presentation and checks everything the full product relies on (about 10 seconds).</p>
-    <button id="run" class="primary">Run pilot checks</button>
+  <section id="editor" hidden>
+    <div class="edhead">
+      <h2 id="ed-title">Chart</h2>
+      <span id="ed-status" class="muted"></span>
+    </div>
+    <div class="row">
+      <label>Type
+        <select id="ed-type">
+          <option value="column:stacked">Stacked column</option>
+          <option value="column:clustered">Clustered column</option>
+          <option value="column:percent">100% column</option>
+          <option value="bar:stacked">Stacked bar</option>
+          <option value="bar:clustered">Clustered bar</option>
+          <option value="bar:percent">100% bar</option>
+          <option value="line:stacked">Line</option>
+          <option value="combo:stacked">Combination (stacked)</option>
+          <option value="combo:clustered">Combination (clustered)</option>
+        </select>
+      </label>
+    </div>
+    <div class="row opts">
+      <label><input type="checkbox" id="ed-values" /> Values</label>
+      <label><input type="checkbox" id="ed-totals" /> Totals</label>
+      <label>Names
+        <select id="ed-legend">
+          <option value="auto">Auto</option>
+          <option value="right">Right</option>
+          <option value="top">Legend on top</option>
+          <option value="none">Hidden</option>
+        </select>
+      </label>
+      <label>Decimals
+        <select id="ed-dec">
+          <option value="">Auto</option>
+          <option value="0">0</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+        </select>
+      </label>
+    </div>
+    <div id="sheet" class="sheetwrap"></div>
+    <div class="row tools">
+      <button id="add-series">+ Series</button>
+      <button id="add-cat">+ Category</button>
+      <button id="del-series" class="secondary">− Series</button>
+      <button id="del-cat" class="secondary">− Category</button>
+      <button id="transpose" class="secondary" title="Swap series and categories">⇄</button>
+    </div>
+    <p class="muted">Paste from Excel: copy a range with series names down the left and categories across the top, click the first data cell above, and paste. The chart updates as you type.</p>
+  </section>
+
+  <section id="insert">
+    <h2>Insert a chart</h2>
+    <div class="types">
+      <button data-type="column" data-mode="stacked" title="Stacked column">▥ Stacked</button>
+      <button data-type="column" data-mode="clustered" title="Clustered column">▥ Clustered</button>
+      <button data-type="column" data-mode="percent" title="100% column">▥ 100%</button>
+      <button data-type="bar" data-mode="stacked" title="Stacked bar">▤ Stacked bar</button>
+      <button data-type="bar" data-mode="clustered" title="Clustered bar">▤ Clustered bar</button>
+      <button data-type="bar" data-mode="percent" title="100% bar">▤ 100% bar</button>
+      <button data-type="line" data-mode="stacked" title="Line">⟋ Line</button>
+      <button data-type="combo" data-mode="stacked" title="Columns with a line">▥⟋ Combination</button>
+      <button data-type="gantt" data-mode="stacked" title="Gantt / timeline" disabled>▬ Gantt (v0.4)</button>
+    </div>
+    <p class="muted">To place a chart exactly, select a shape or placeholder first; the chart takes its position and size.</p>
+  </section>
+
+  <details id="settings">
+    <summary>Settings</summary>
+    <div class="row">
+      <label>Font size <select id="set-font"><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option></select></label>
+      <label>Numbers
+        <select id="set-num">
+          <option value="en">1,234.5</option>
+          <option value="eu">1.234,5</option>
+          <option value="space">1 234,5</option>
+        </select>
+      </label>
+    </div>
+    <div class="row"><span class="muted">Colours (option A):</span> <span id="set-palette"></span></div>
+    <p class="muted">Settings apply to charts you insert or edit from now on.</p>
+  </details>
+
+  <details id="diagnostics">
+    <summary>Diagnostics</summary>
+    <p class="muted">Adds a test slide and checks what PowerPoint supports on this computer. Copy the report if I ask for it.</p>
+    <button id="run">Run checks</button>
     <ul id="results"></ul>
-  </section>
-
-  <section>
-    <h2>2 · Edit round-trip</h2>
-    <p>The checks now test this automatically. To try it yourself: on the test slide, <b>resize or move the chart</b>, keep it selected, then click below. It should redraw with new numbers, filling the new size.</p>
-    <button id="redraw">Redraw selected chart with new data</button>
-    <button id="insert" class="secondary">Insert sample chart on current slide</button>
-    <p id="selection" class="muted">Selection: –</p>
-  </section>
-
-  <section>
-    <h2>3 · Send me the report</h2>
-    <p>Copy the report and paste it into our Claude conversation, with a screenshot of the test slide.</p>
-    <button id="copy">Copy report</button>
-    <textarea id="report" readonly rows="8" spellcheck="false"></textarea>
-  </section>
+    <button id="copy" class="secondary">Copy report</button>
+    <textarea id="report" readonly rows="6" spellcheck="false"></textarea>
+  </details>
 
   <div id="preview"></div>
-  <footer class="muted" id="version"></footer>
 
   <script type="module" src="./taskpane.ts"></script>
 </body>

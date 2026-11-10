@@ -3,8 +3,8 @@
 Consulting-style charts for PowerPoint (stacked, waterfall, Mekko, Gantt, …), drawn as native
 PowerPoint shapes. Built as an Office web add-in: works in PowerPoint for Mac, Windows and the web.
 
-**Status:** pilot (v0.1). The pilot checks that PowerPoint on your machine supports everything the
-full product needs, and draws a sample chart.
+**Status:** v0.3 — column and bar charts (stacked, clustered, 100%), line and combination charts,
+data sheet with paste from Excel, click-to-edit. Gantt/timeline arrives in v0.4.
 
 ## Privacy
 
@@ -37,8 +37,9 @@ provide the manifest URL `https://okanakgun78.github.io/slide-charts/manifest.xm
 npm install
 npm test          # engine unit tests
 npm run build     # type-check, bundle, write dist/manifest.xml (set BASE_URL for the host)
-npm run preview   # screenshot of the task pane preview (needs Playwright)
+npm run e2e       # build, then drive the panel against a mock PowerPoint (needs Playwright)
 ```
 
-Layout: `src/engine` (pure chart layout + SVG preview), `src/ppt` (PowerPoint renderer, pilot
-checks), `src/taskpane.*` (side panel UI), `manifest.template.xml` (add-in manifest).
+Layout: `src/engine` (pure chart layout + SVG preview), `src/ppt` (PowerPoint renderer, diagnostics),
+`src/ui` (data sheet, parsing, settings), `src/taskpane.*` (side panel), `test/e2e` (mock PowerPoint +
+end-to-end test), `manifest.template.xml` (add-in manifest).

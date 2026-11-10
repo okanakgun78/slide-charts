@@ -4,7 +4,8 @@
 
 import { DEFAULT_PALETTE, normHex } from "../engine/format";
 import { canvasMeasure } from "../engine/measure";
-import type { Frame, StackedSpec, Style } from "../engine/types";
+import { defaultStyle, sampleCategory } from "../engine/spec";
+import type { CategorySpec, Frame, Style } from "../engine/types";
 import {
   addPrim, drawChart, errText, LINE_EPS, readChart, readThemeAccents, redrawChart, shapeExists, TAG,
 } from "./render";
@@ -28,21 +29,11 @@ export interface PilotContext {
   chartGroupId?: string;
 }
 
-export const SAMPLE_SPEC: StackedSpec = {
-  v: 1,
-  type: "stacked",
-  categories: ["2021", "2022", "2023", "2024", "2025E"],
-  series: [
-    { name: "Europe", values: [42, 46, 51, 55, 61] },
-    { name: "North America", values: [31, 33, 38, 41, 47] },
-    { name: "Asia", values: [12, 16, 21, 27, 34] },
-    { name: "Rest of world", values: [5, 6, 6, 8, 9] },
-  ],
-  showTotals: true,
-};
+export const SAMPLE_SPEC: CategorySpec = sampleCategory("column", "stacked");
 
-export function chartStyle(palette: string[]): Style {
-  return { fontSize: 12, textColor: "#1A1A1A", axisColor: "#7F7F7F", palette };
+export function chartStyle(palette?: string[]): Style {
+  const st = defaultStyle();
+  return palette ? { ...st, palette } : st;
 }
 
 export const FALLBACK_FONTS = '"Aptos", "Calibri", "Helvetica Neue", Arial, sans-serif';
@@ -52,7 +43,7 @@ export function measureFor(pc: Pick<PilotContext, "fontName" | "measureRatio"> |
 }
 
 /** New numbers: each value moves by up to ±25%, rounded like the input. */
-export function perturb(spec: StackedSpec): StackedSpec {
+export function perturb(spec: CategorySpec): CategorySpec {
   return {
     ...spec,
     series: spec.series.map((s) => ({
@@ -201,7 +192,7 @@ const probes: [string, string, Probe][] = [
 
   ["chart", "Draw sample stacked chart (timed)", async (pc) => {
     const frame: Frame = { left: pc.slideW * 0.06, top: pc.slideH * 0.12, width: pc.slideW * 0.58, height: pc.slideH * 0.62 };
-    const r = await drawChart(pc.slideId!, SAMPLE_SPEC, frame, chartStyle(pc.palette), measureFor(pc));
+    const r = await drawChart(pc.slideId!, SAMPLE_SPEC, frame, chartStyle(), measureFor(pc));
     pc.chartGroupId = r.groupId;
     return {
       ok: true,
@@ -292,7 +283,7 @@ const probes: [string, string, Probe][] = [
     }
     const ref = await readChart(pc.slideId!, pc.chartGroupId!);
     if (!ref) return { ok: false, detail: `${resizeNote}; chart not found` };
-    const r = await redrawChart(ref, perturb(SAMPLE_SPEC), chartStyle(pc.palette), measureFor(pc));
+    const r = await redrawChart(ref, perturb(SAMPLE_SPEC), chartStyle(), measureFor(pc));
     const oldGone = !(await shapeExists(pc.slideId!, pc.chartGroupId!));
     const back = await readChart(pc.slideId!, r.groupId);
     pc.chartGroupId = r.groupId;

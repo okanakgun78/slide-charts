@@ -1,150 +1,307 @@
-import { DEFAULT_PALETTE, normHex } from "./engine/format";
+// Side panel: insert charts, edit the selected chart's data and options, settings, diagnostics.
+
+import { layoutCategory } from "./engine/category";
 import { canvasMeasure } from "./engine/measure";
-import { layoutStacked } from "./engine/stacked";
+import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCategory } from "./engine/spec";
 import { toSvg } from "./engine/svg";
-import type { Frame } from "./engine/types";
+import type { CategorySpec, Frame, Mode } from "./engine/types";
+import { FALLBACK_FONTS, runPilot, type ProbeResult } from "./ppt/probes";
 import {
-  chartStyle, FALLBACK_FONTS, measureFor, perturb, runPilot, SAMPLE_SPEC, type PilotContext, type ProbeResult,
-} from "./ppt/probes";
-import { APP_VERSION, drawChart, errText, findSelectedChart, readThemeAccents, redrawChart } from "./ppt/render";
+  APP_VERSION, drawChart, errText, findSelectedChart, inkFor, readChart, readSlideBackground, redrawChart, TAG,
+  type ChartRef,
+} from "./ppt/render";
+import { loadSettings, saveSettings, separators, styleFrom, type Settings } from "./ui/settings";
+import { Sheet } from "./ui/sheet";
 
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
+const settings: Settings = loadSettings();
 const state: {
-  pc?: PilotContext;
-  results: ProbeResult[];
-  actions: Record<string, unknown>[];
-} = { results: [], actions: [] };
+  ref: ChartRef | null;
+  busy: boolean;
+  pending: boolean;
+  calib: { font?: string; ratio?: number } | null;
+  ink: Map<string, ReturnType<typeof inkFor>>;
+  probe: { results: ProbeResult[]; actions: Record<string, unknown>[] };
+} = { ref: null, busy: false, pending: false, calib: null, ink: new Map(), probe: { results: [], actions: [] } };
 
-function setBusy(busy: boolean) {
-  for (const id of ["run", "redraw", "insert"]) $<HTMLButtonElement>(id).disabled = busy;
+// ---------- Helpers ----------
+
+let toastTimer: number | undefined;
+function toast(msg: string, ms = 5000) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.hidden = false;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (t.hidden = true), ms);
 }
 
-function renderResult(r: ProbeResult) {
-  const li = document.createElement("li");
-  const cls = r.ok === true ? "ok" : r.ok === false ? "bad" : "info";
-  const mark = r.ok === true ? "✓" : r.ok === false ? "✗" : "◐";
-  li.innerHTML = `<span class="st ${cls}">${mark}</span>${r.name}${r.ms !== undefined ? ` <span class="muted">(${r.ms} ms)</span>` : ""}<span class="d"></span>`;
-  (li.querySelector(".d") as HTMLElement).textContent = r.detail;
-  $("results").appendChild(li);
+function status(msg: string) {
+  $("ed-status").textContent = msg;
 }
 
-function updateReport() {
-  const d = typeof Office !== "undefined" && Office.context?.diagnostics;
-  const report = {
-    app: APP_VERSION,
-    when: new Date().toISOString(),
-    office: d ? `${d.host} ${d.platform} ${d.version}` : "n/a",
-    calibration: state.pc ? { font: state.pc.fontName, measureRatio: state.pc.measureRatio, palette: state.pc.palette } : null,
-    results: state.results.map((r) => ({ id: r.id, ok: r.ok, ms: r.ms, detail: r.detail })),
-    actions: state.actions,
-  };
-  $<HTMLTextAreaElement>("report").value = JSON.stringify(report, null, 1);
+function measure() {
+  return canvasMeasure(`"${state.calib?.font ?? "Aptos"}", ${FALLBACK_FONTS}`, state.calib?.ratio ?? 1);
 }
 
-function logAction(a: Record<string, unknown>) {
-  state.actions.push({ at: new Date().toISOString().slice(11, 19), ...a });
-  updateReport();
-}
-
-async function themePalette(slideId: string): Promise<string[]> {
+/** Measures the presentation's body font once per session (temporary off-slide text boxes). */
+async function ensureCalibrated(slideId: string) {
+  if (state.calib) return;
+  state.calib = {};
   try {
-    const hex = (await readThemeAccents(slideId)).map(normHex);
-    if (hex.every((h) => h)) return hex as string[];
-  } catch {
-    /* fall back below */
-  }
-  return state.pc?.palette ?? DEFAULT_PALETTE;
-}
-
-async function onRun() {
-  setBusy(true);
-  $("results").innerHTML = "";
-  state.results = [];
-  try {
-    const { results, pc } = await runPilot((r) => {
-      state.results.push(r);
-      renderResult(r);
-      updateReport();
+    const samples = ["Revenue 2024", "1,234.5", "North America", "Q3 2025E"];
+    const out = await PowerPoint.run(async (ctx) => {
+      const shapes = ctx.presentation.slides.getItem(slideId).shapes;
+      const boxes = samples.map((t, k) => {
+        const s = shapes.addTextBox(t, { left: -2000, top: k * 30, width: 400, height: 20 });
+        s.textFrame.wordWrap = false;
+        s.textFrame.leftMargin = 0;
+        s.textFrame.rightMargin = 0;
+        s.textFrame.textRange.font.size = 12;
+        s.textFrame.autoSizeSetting = "AutoSizeShapeToFitText";
+        return s;
+      });
+      await ctx.sync();
+      boxes.forEach((b) => { b.load("width"); b.textFrame.textRange.font.load("name"); });
+      await ctx.sync();
+      const font = boxes[0].textFrame.textRange.font.name ?? undefined;
+      const widths = boxes.map((b) => b.width);
+      boxes.forEach((b) => b.delete());
+      await ctx.sync();
+      return { font, widths };
     });
-    state.pc = pc;
-    state.results = results;
-  } catch (e) {
-    logAction({ action: "run", error: errText(e) });
-  } finally {
-    updateReport();
-    setBusy(false);
+    const m = canvasMeasure(`"${out.font}", ${FALLBACK_FONTS}`);
+    const ratios = samples.map((t, k) => out.widths[k] / m(t, 12)).filter((r) => r > 0.5 && r < 2);
+    state.calib = { font: out.font, ratio: ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1 };
+  } catch {
+    /* keep defaults */
   }
 }
 
-async function onRedraw() {
-  setBusy(true);
+async function styleForSlide(slideId: string) {
+  let ink = state.ink.get(slideId);
+  if (!ink) {
+    ink = inkFor(await readSlideBackground(slideId));
+    state.ink.set(slideId, ink);
+  }
+  return styleFrom(settings, ink);
+}
+
+// ---------- Editor ----------
+
+const sheet = new Sheet($("sheet"), {
+  decimalSep: () => separators(settings).decimalSep,
+  combo: () => $<HTMLSelectElement>("ed-type").value.startsWith("combo"),
+  palette: () => PALETTE_A,
+  onChange: () => scheduleApply(),
+});
+
+function specFromEditor(): CategorySpec {
+  const [type, mode] = $<HTMLSelectElement>("ed-type").value.split(":") as [CategorySpec["type"], Mode];
+  const d = sheet.data();
+  const dec = $<HTMLSelectElement>("ed-dec").value;
+  return {
+    v: 2, type, mode,
+    categories: d.categories,
+    series: d.series,
+    labels: {
+      values: $<HTMLInputElement>("ed-values").checked,
+      totals: $<HTMLInputElement>("ed-totals").checked,
+      legend: $<HTMLSelectElement>("ed-legend").value as CategorySpec["labels"]["legend"],
+    },
+    decimals: dec === "" ? null : Number(dec),
+  };
+}
+
+function syncOptionStates() {
+  const [type, mode] = $<HTMLSelectElement>("ed-type").value.split(":");
+  $<HTMLInputElement>("ed-totals").disabled = mode === "clustered" || type === "line";
+}
+
+function openEditor(ref: ChartRef) {
+  state.ref = ref;
+  const spec = ref.stored.spec;
+  $("editor").hidden = false;
+  if (spec.type === "gantt") {
+    $("ed-title").textContent = "Gantt chart";
+    status("Gantt editing arrives in v0.4.");
+    return;
+  }
+  $("ed-title").textContent = describe(spec);
+  $<HTMLSelectElement>("ed-type").value = `${spec.type}:${spec.type === "combo" && spec.mode === "percent" ? "stacked" : spec.type === "line" ? "stacked" : spec.mode}`;
+  $<HTMLInputElement>("ed-values").checked = spec.labels.values;
+  $<HTMLInputElement>("ed-totals").checked = spec.labels.totals;
+  $<HTMLSelectElement>("ed-legend").value = spec.labels.legend;
+  $<HTMLSelectElement>("ed-dec").value = spec.decimals === null ? "" : String(spec.decimals);
+  syncOptionStates();
+  sheet.load({ categories: spec.categories, series: spec.series });
+  status("");
+}
+
+function closeEditor() {
+  state.ref = null;
+  $("editor").hidden = true;
+}
+
+let applyTimer: number | undefined;
+function scheduleApply(delay = 600) {
+  if (!state.ref) return;
+  status("…");
+  window.clearTimeout(applyTimer);
+  applyTimer = window.setTimeout(apply, delay);
+}
+
+async function apply() {
+  if (!state.ref) return;
+  if (state.busy) {
+    state.pending = true;
+    return;
+  }
+  state.busy = true;
   const t0 = performance.now();
-  let step = "find selected chart";
   try {
-    const ref = await findSelectedChart();
-    if (!ref) {
-      $("selection").textContent = "Select a Slide Charts chart first.";
-      logAction({ action: "redraw", result: "no chart selected" });
+    const spec = specFromEditor();
+    const fresh = await readChart(state.ref.slideId, state.ref.groupId);
+    if (!fresh) {
+      closeEditor();
+      toast("That chart no longer exists (deleted or undone). Select a chart to edit it.");
       return;
     }
-    step = "read theme";
-    const palette = await themePalette(ref.slideId);
-    step = "redraw";
-    const r = await redrawChart(ref, perturb(ref.stored.spec), chartStyle(palette), measureFor(state.pc));
-    $("selection").textContent = "Redrawn ✓";
-    logAction({
-      action: "redraw", ok: true, moved: r.moved, resized: r.resized, deleteStrategy: r.deleteStrategy,
-      before: ref.current, frameAfter: r.frame, log: r.log, ms: Math.round(performance.now() - t0),
-    });
+    await ensureCalibrated(fresh.slideId);
+    const r = await redrawChart(fresh, spec, await styleForSlide(fresh.slideId), measure());
+    state.ref = { slideId: fresh.slideId, groupId: r.groupId, stored: r.stored, current: r.stored.drawn };
+    $("ed-title").textContent = describe(spec);
+    status(r.warnings.length ? `⚠ ${r.warnings.join("; ")}` : `Updated · ${(performance.now() - t0) / 1000 < 1 ? "<1" : ((performance.now() - t0) / 1000).toFixed(1)} s`);
   } catch (e) {
-    $("selection").textContent = `Redraw failed at "${step}" — details in the report.`;
-    logAction({ action: "redraw", step, error: errText(e), ms: Math.round(performance.now() - t0) });
+    status("Update failed");
+    toast(`Update failed: ${errText(e)}`, 10000);
   } finally {
-    setBusy(false);
+    state.busy = false;
+    if (state.pending) {
+      state.pending = false;
+      void apply();
+    }
   }
 }
 
-async function onInsert() {
-  setBusy(true);
-  const t0 = performance.now();
+// ---------- Insert ----------
+
+async function insertChart(type: CategorySpec["type"], mode: Mode) {
+  if (state.busy) return;
+  state.busy = true;
   try {
-    const where = await PowerPoint.run(async (ctx) => {
+    const target = await PowerPoint.run(async (ctx) => {
       const slides = ctx.presentation.getSelectedSlides();
       slides.load("items/id");
+      const sel = ctx.presentation.getSelectedShapes();
+      sel.load("items/id,items/left,items/top,items/width,items/height,items/level");
       const ps = ctx.presentation.pageSetup;
       ps.load("slideWidth,slideHeight");
       await ctx.sync();
-      return { slideId: slides.items[0].id, w: ps.slideWidth, h: ps.slideHeight };
+      if (!slides.items.length) throw new Error("Select a slide first.");
+      let frame: Frame = { left: ps.slideWidth * 0.05, top: ps.slideHeight * 0.2, width: ps.slideWidth * 0.9, height: ps.slideHeight * 0.7 };
+      const s = sel.items[0];
+      if (sel.items.length === 1 && s.level === 0 && s.width > 60 && s.height > 40) {
+        const tag = s.tags.getItemOrNullObject(TAG);
+        await ctx.sync();
+        if (tag.isNullObject) frame = { left: s.left, top: s.top, width: s.width, height: s.height };
+      }
+      return { slideId: slides.items[0].id, frame };
     });
-    const frame: Frame = { left: where.w * 0.2, top: where.h * 0.2, width: where.w * 0.6, height: where.h * 0.6 };
-    const r = await drawChart(where.slideId, SAMPLE_SPEC, frame, chartStyle(await themePalette(where.slideId)), measureFor(state.pc));
+    await ensureCalibrated(target.slideId);
+    const spec = sampleCategory(type, mode);
+    const r = await drawChart(target.slideId, spec, target.frame, await styleForSlide(target.slideId), measure());
     await PowerPoint.run(async (ctx) => {
-      ctx.presentation.slides.getItem(where.slideId).setSelectedShapes([r.groupId]);
+      ctx.presentation.slides.getItem(target.slideId).setSelectedShapes([r.groupId]);
       await ctx.sync();
     });
-    logAction({ action: "insert", shapes: r.shapeCount, ms: Math.round(performance.now() - t0) });
+    openEditor({ slideId: target.slideId, groupId: r.groupId, stored: r.stored, current: r.drawn });
+    status("Inserted with sample data — paste or type yours below.");
+    sheet.focusCell(1, 1);
   } catch (e) {
-    logAction({ action: "insert", error: errText(e), ms: Math.round(performance.now() - t0) });
+    toast(`Insert failed: ${errText(e)}`, 10000);
   } finally {
-    setBusy(false);
+    state.busy = false;
   }
 }
+
+// ---------- Selection ----------
 
 let selTimer: number | undefined;
 function onSelectionChanged() {
   window.clearTimeout(selTimer);
   selTimer = window.setTimeout(async () => {
+    if (state.busy) return;
     try {
       const ref = await findSelectedChart();
-      $("selection").textContent = ref
-        ? `Selection: chart (${ref.stored.spec.type}, ${ref.stored.spec.categories.length} categories × ${ref.stored.spec.series.length} series)`
-        : "Selection: not a Slide Charts chart";
-      if (!state.actions.some((a) => a.action === "selection-event")) logAction({ action: "selection-event", ok: true });
-    } catch (e) {
-      $("selection").textContent = `Selection: (${errText(e)})`;
+      if (!ref) {
+        if (!$("editor").contains(document.activeElement)) closeEditor();
+        return;
+      }
+      if (state.ref && ref.groupId === state.ref.groupId) return;
+      openEditor(ref);
+    } catch {
+      /* selection of unsupported objects: ignore */
     }
-  }, 150);
+  }, 200);
+}
+
+// ---------- Settings ----------
+
+function initSettings() {
+  $<HTMLSelectElement>("set-font").value = String(settings.fontSize);
+  $<HTMLSelectElement>("set-num").value = settings.numberFormat;
+  $("set-palette").innerHTML = [...PALETTE_A, ...HIGHLIGHTS].map((c) => `<span class="chip" style="background:${c}" title="${c}"></span>`).join("");
+  const onChange = () => {
+    // Read the sheet with the old decimal separator before switching formats.
+    const data = state.ref ? sheet.data() : null;
+    settings.fontSize = Number($<HTMLSelectElement>("set-font").value);
+    settings.numberFormat = $<HTMLSelectElement>("set-num").value as Settings["numberFormat"];
+    saveSettings(settings);
+    if (data) {
+      sheet.load(data); // re-render cells with the new decimal separator
+      scheduleApply(0);
+    }
+  };
+  $("set-font").addEventListener("change", onChange);
+  $("set-num").addEventListener("change", onChange);
+}
+
+// ---------- Diagnostics ----------
+
+function updateReport() {
+  const d = typeof Office !== "undefined" && Office.context?.diagnostics;
+  $<HTMLTextAreaElement>("report").value = JSON.stringify({
+    app: APP_VERSION,
+    when: new Date().toISOString(),
+    office: d ? `${d.host} ${d.platform} ${d.version}` : "n/a",
+    calibration: state.calib,
+    results: state.probe.results.map((r) => ({ id: r.id, ok: r.ok, ms: r.ms, detail: r.detail })),
+    actions: state.probe.actions,
+  }, null, 1);
+}
+
+async function onRunChecks() {
+  $("results").innerHTML = "";
+  state.probe.results = [];
+  const btn = $<HTMLButtonElement>("run");
+  btn.disabled = true;
+  try {
+    await runPilot((r) => {
+      state.probe.results.push(r);
+      const li = document.createElement("li");
+      const cls = r.ok === true ? "ok" : r.ok === false ? "bad" : "info";
+      li.innerHTML = `<span class="st ${cls}">${r.ok === true ? "✓" : r.ok === false ? "✗" : "◐"}</span>${r.name}<span class="d"></span>`;
+      (li.querySelector(".d") as HTMLElement).textContent = r.detail;
+      $("results").appendChild(li);
+      updateReport();
+    });
+  } catch (e) {
+    state.probe.actions.push({ action: "run", error: errText(e) });
+  } finally {
+    btn.disabled = false;
+    updateReport();
+  }
 }
 
 async function onCopy() {
@@ -160,36 +317,56 @@ async function onCopy() {
   window.setTimeout(() => ($("copy").textContent = "Copy report"), 1500);
 }
 
+// ---------- Preview outside Office ----------
+
 function showPreview() {
-  const frame: Frame = { left: 0, top: 0, width: 560, height: 320 };
-  const { prims } = layoutStacked(SAMPLE_SPEC, frame, chartStyle(DEFAULT_PALETTE), canvasMeasure(FALLBACK_FONTS));
-  $("preview").innerHTML = toSvg(prims, frame);
+  const frame: Frame = { left: 0, top: 0, width: 520, height: 300 };
+  const m = canvasMeasure(FALLBACK_FONTS);
+  const kinds: [CategorySpec["type"], Mode, string][] = [
+    ["column", "stacked", "Stacked"], ["column", "clustered", "Clustered"], ["column", "percent", "100%"],
+    ["bar", "stacked", "Stacked bar"], ["line", "stacked", "Line"], ["combo", "stacked", "Combination"],
+  ];
+  $("preview").innerHTML = kinds
+    .map(([t, mo, name]) => `<figure><figcaption>${name}</figcaption>${toSvg(layoutCategory(sampleCategory(t, mo), frame, defaultStyle(), m).prims, frame, FALLBACK_FONTS, m)}</figure>`)
+    .join("");
 }
 
+// ---------- Wiring ----------
+
 function wire() {
-  $("run").addEventListener("click", onRun);
-  $("redraw").addEventListener("click", onRedraw);
-  $("insert").addEventListener("click", onInsert);
-  $("copy").addEventListener("click", onCopy);
   $("version").textContent = `v${APP_VERSION}`;
+  document.querySelectorAll<HTMLButtonElement>("#insert .types button").forEach((b) =>
+    b.addEventListener("click", () => insertChart(b.dataset.type as CategorySpec["type"], b.dataset.mode as Mode)),
+  );
+  $("ed-type").addEventListener("change", () => {
+    syncOptionStates();
+    sheet.render();
+    scheduleApply(0);
+  });
+  for (const id of ["ed-values", "ed-totals", "ed-legend", "ed-dec"]) $(id).addEventListener("change", () => scheduleApply(0));
+  $("add-series").addEventListener("click", () => sheet.addSeries());
+  $("add-cat").addEventListener("click", () => sheet.addCategory());
+  $("del-series").addEventListener("click", () => { const m = sheet.deleteSeries(); if (m) toast(m); });
+  $("del-cat").addEventListener("click", () => { const m = sheet.deleteCategory(); if (m) toast(m); });
+  $("transpose").addEventListener("click", () => sheet.transpose());
+  $("run").addEventListener("click", onRunChecks);
+  $("copy").addEventListener("click", onCopy);
+  initSettings();
   updateReport();
 }
 
 wire();
 if (typeof Office === "undefined") {
   $("not-office").hidden = false;
-  setBusy(true);
   showPreview();
 } else {
   Office.onReady((info) => {
     if (info.host !== Office.HostType.PowerPoint) {
       $("not-office").hidden = false;
-      setBusy(true);
       showPreview();
       return;
     }
-    Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged, onSelectionChanged, (res) => {
-      logAction({ action: "selection-handler", registered: res.status === Office.AsyncResultStatus.Succeeded });
-    });
+    Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged, onSelectionChanged);
+    onSelectionChanged(); // a chart may already be selected when the panel opens
   });
 }

@@ -1,13 +1,15 @@
 {
   "name": "slide-charts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Consulting-style charts for PowerPoint (Office add-in).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc",
     "test": "vitest run",
     "build": "tsc && vite build && node scripts/build-manifest.mjs",
-    "preview": "node scripts/preview.mjs"
+    "preview": "node scripts/preview.mjs",
+    "e2e": "npm run build && node test/e2e/run.mjs",
+    "gallery": "esbuild scripts/gallery.ts --bundle --platform=node --format=esm --outfile=gallery.mjs && node gallery.mjs gallery.html"
   },
   "license": "UNLICENSED",
   "devDependencies": {

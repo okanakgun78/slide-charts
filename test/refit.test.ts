@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 
 // Importing the renderer must not touch the PowerPoint global (it only exists after Office loads).
 import { refitFrame } from "../src/ppt/render";
+import { sampleCategory } from "../src/engine/spec";
 
 const stored = {
   app: "slide-charts" as const, ver: "t",
-  spec: { v: 1 as const, type: "stacked" as const, categories: [], series: [], showTotals: true },
+  spec: sampleCategory("column", "stacked"),
   frame: { left: 100, top: 100, width: 400, height: 200 },
   drawn: { left: 100, top: 110, width: 400, height: 190 },
 };

@@ -5,11 +5,14 @@
 //   diagonal. Zero dimensions are now drawn as LINE_EPS.
 // - Deleting a group failed (GeneralException) or was ignored, so removal tries several strategies.
 
-import { layoutStacked } from "../engine/stacked";
+import { layoutCategory } from "../engine/category";
+import { luminance, normHex } from "../engine/format";
+import { layoutGantt } from "../engine/gantt";
+import { migrate } from "../engine/spec";
 import type { Align, ChartSpec, Frame, Layout, Measure, Prim, Style, VAlign } from "../engine/types";
 
 export const TAG = "SLIDECHARTS";
-export const APP_VERSION = "0.2.0-pilot";
+export const APP_VERSION = "0.3.0";
 /** Thickness used instead of 0 for horizontal/vertical line boxes (points). */
 export const LINE_EPS = 0.01;
 
@@ -24,10 +27,7 @@ export interface StoredChart {
 }
 
 export function layoutChart(spec: ChartSpec, frame: Frame, style: Style, measure: Measure): Layout {
-  switch (spec.type) {
-    case "stacked":
-      return layoutStacked(spec, frame, style, measure);
-  }
+  return spec.type === "gantt" ? layoutGantt(spec, frame, style, measure) : layoutCategory(spec, frame, style, measure);
 }
 
 /** Maps the stored layout frame through the move/resize the user applied to the group. */
@@ -87,6 +87,14 @@ export function addPrim(shapes: PowerPoint.ShapeCollection, p: Prim): PowerPoint
     s.name = p.role;
     return s;
   }
+  if (p.kind === "shape") {
+    const s = shapes.addGeometricShape(p.shape, { left: p.x, top: p.y, width: Math.max(p.w, 0.1), height: Math.max(p.h, 0.1) });
+    s.fill.setSolidColor(p.fill);
+    if (p.stroke) s.lineFormat.color = p.stroke;
+    else s.lineFormat.visible = false;
+    s.name = p.role;
+    return s;
+  }
   if (p.kind === "line") {
     const g = lineGeometry(p.x1, p.y1, p.x2, p.y2);
     const s = shapes.addLine("Straight", { left: g.left, top: g.top, width: g.width, height: g.height });
@@ -100,7 +108,7 @@ export function addPrim(shapes: PowerPoint.ShapeCollection, p: Prim): PowerPoint
   const s = shapes.addTextBox(p.text, { left: p.x, top: p.y, width: Math.max(p.w, 1), height: Math.max(p.h, 1) });
   const tf = s.textFrame;
   tf.autoSizeSetting = "AutoSizeNone";
-  tf.wordWrap = false;
+  tf.wordWrap = !!p.wrap;
   tf.leftMargin = 0;
   tf.rightMargin = 0;
   tf.topMargin = 0;
@@ -121,6 +129,7 @@ export interface DrawResult {
   msShapes: number;
   msGroupTag: number;
   drawn: Frame;
+  stored: StoredChart;
   warnings: string[];
 }
 
@@ -151,7 +160,7 @@ export async function drawChart(
     group.tags.add(TAG, JSON.stringify(stored));
     await ctx.sync();
     const t2 = performance.now();
-    return { groupId: group.id, shapeCount: prims.length, msShapes: t1 - t0, msGroupTag: t2 - t1, drawn, warnings };
+    return { groupId: group.id, shapeCount: prims.length, msShapes: t1 - t0, msGroupTag: t2 - t1, drawn, stored, warnings };
   });
 }
 
@@ -173,9 +182,11 @@ export async function readChart(slideId: string, groupId: string): Promise<Chart
     tag.load("value");
     await ctx.sync();
     if (tag.isNullObject) return null;
+    const stored = JSON.parse(tag.value) as StoredChart;
+    stored.spec = migrate(stored.spec);
     return {
       slideId, groupId,
-      stored: JSON.parse(tag.value) as StoredChart,
+      stored,
       current: { left: shape.left, top: shape.top, width: shape.width, height: shape.height },
     };
   });
@@ -257,6 +268,8 @@ export async function removeGroup(slideId: string, groupId: string): Promise<{ s
 
 export interface RedrawResult {
   groupId: string;
+  stored: StoredChart;
+  warnings: string[];
   frame: Frame;
   moved: boolean;
   resized: boolean;
@@ -284,7 +297,7 @@ export async function redrawChart(ref: ChartRef, spec: ChartSpec, style: Style, 
   } catch (e) {
     del.log.push(`reselect: ${errText(e)}`);
   }
-  return { groupId: r.groupId, frame, moved, resized, deleteStrategy: del.strategy, log: del.log, ms: performance.now() - t0 };
+  return { groupId: r.groupId, stored: r.stored, warnings: r.warnings, frame, moved, resized, deleteStrategy: del.strategy, log: del.log, ms: performance.now() - t0 };
 }
 
 /** Reads the theme accent colours of a slide (PowerPointApi 1.10). */
@@ -298,4 +311,32 @@ export async function readThemeAccents(slideId: string): Promise<string[]> {
     await ctx.sync();
     return results.map((r) => r.value);
   });
+}
+
+/**
+ * Best-effort background colour of a slide (slide, then layout, then master; solid fills only).
+ * Returns null when it cannot be determined (pictures, gradients, older APIs).
+ */
+export async function readSlideBackground(slideId: string): Promise<string | null> {
+  try {
+    return await PowerPoint.run(async (ctx) => {
+      const slide = ctx.presentation.slides.getItem(slideId);
+      const sources = [slide.background.fill, slide.layout.background.fill, slide.slideMaster.background.fill];
+      const solids = sources.map((f) => f.getSolidFillOrNullObject());
+      solids.forEach((sf) => sf.load("color"));
+      slide.background.load("isMasterBackgroundFollowed");
+      await ctx.sync();
+      const order = slide.background.isMasterBackgroundFollowed ? solids.slice(1) : solids;
+      for (const sf of order) if (!sf.isNullObject && normHex(sf.color)) return normHex(sf.color);
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Text and axis colours that read on a background colour. */
+export function inkFor(background: string | null): { textColor: string; axisColor: string; gridColor: string } {
+  if (background && luminance(background) < 0.3) return { textColor: "#FFFFFF", axisColor: "#D9D9D9", gridColor: "#8C96B0" };
+  return { textColor: "#1A1A1A", axisColor: "#7F7F7F", gridColor: "#D9D9D9" };
 }
