@@ -17,6 +17,20 @@ describe("parseTSV", () => {
   });
 });
 
+describe("parseTSV with quoted cells", () => {
+  it("keeps line breaks and tabs inside quoted cells", () => {
+    expect(parseTSV('Day\tPlan\r\n02/11\t"1. Rest\n2. Stretching"\r\n03/11\t"say ""hi"""\r\n')).toEqual([
+      ["Day", "Plan"], ["02/11", "1. Rest\n2. Stretching"], ["03/11", 'say "hi"'],
+    ]);
+  });
+  it("leaves quotes inside unquoted cells alone", () => {
+    expect(parseTSV('5" screen\tok')).toEqual([['5" screen', "ok"]]);
+  });
+  it("keeps trailing empty cells", () => {
+    expect(parseTSV("a\t\tb\t\n")).toEqual([["a", "", "b", ""]]);
+  });
+});
+
 describe("cellText", () => {
   it("round-trips", () => {
     expect(cellText(0.1 + 0.2)).toBe("0.3");

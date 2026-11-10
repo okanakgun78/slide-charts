@@ -8,12 +8,14 @@ tests and deploys (`.github/workflows/deploy.yml`). Updates reach the user on re
 
 ## Architecture
 - `src/engine/` — pure layout: spec + frame + style + measure → primitives (rect/text/line/shape).
-  `category.ts` (column/bar stacked|clustered|percent, line, combo), `gantt.ts`, `dates.ts`,
+  `category.ts` (column/bar stacked|clustered|percent, line, combo), `gantt.ts`, `calendar.ts`
+  (timeline header over free-text cells), `timeline.ts` (shared tiers + header), `dates.ts`,
   `spec.ts` (types live in `types.ts`; samples, palette A, migration), `svg.ts` (preview).
 - `src/ppt/render.ts` — primitives → PowerPoint shapes; group + JSON spec in tag `SLIDECHARTS`
   (`StoredChart`: spec, frame, drawn bbox). Redraw = read tag → refit frame to the group's current
   bounds → delete group → draw → reselect. `probes.ts` = Diagnostics panel checks.
-- `src/ui/` — data sheets (`sheet.ts` category, `ganttSheet.ts`), parsing, settings (localStorage).
+- `src/ui/` — data sheets (`sheet.ts` category, `ganttSheet.ts`, `calendarSheet.ts`), parsing (TSV with
+  quoted multi-line cells), settings (localStorage).
 - `src/taskpane.ts` — panel orchestration: insert, selection-driven editor, debounced live redraw.
 
 ## Facts measured on the user's Mac (keep these)
@@ -25,6 +27,8 @@ tests and deploys (`.github/workflows/deploy.yml`). Updates reach the user on re
 - Text: PowerPoint width ≈ 1.04 × canvas measure for the theme font; calibrated once per session.
 - Office.js constants (`PowerPoint.X.y`) are NOT available at module load — use string literals.
 - Draw ~52 shapes ≈ 0.18 s; redraw ≈ 0.22 s.
+- Line breaks inside a text box: the API does not document the separator; `detectLineBreak` tests
+  "\n", "\r", "\v" once per session (in `ensureCalibrated`) and the renderer uses the winner.
 
 ## Conventions
 - First data-sheet row = top segment in columns (think-cell); first series leftmost in bars.
@@ -42,6 +46,8 @@ tests and deploys (`.github/workflows/deploy.yml`). Updates reach the user on re
 
 ## Scope
 Done (Phase 1): C1 column/bar, C2 line + combo, C7 Gantt, F1 labels/totals/legend, D1 data sheet.
+Added on request: Gantt timeline tiers in the user's sample style (v0.5); Calendar chart (v0.6) —
+date range, any tiers, rows with height/style/fill/alignment, cells keyed by ISO date of the column.
 Remaining (Phase 2): C3 waterfall, C4 Mekko (% and units), F2 CAGR arrows, F3 difference arrows,
 F4 value lines / category gaps / axis breaks, F5 sorting + same scale, F6 better label placement,
 E1 Harvey balls + checkboxes, E3 agenda slides. Deferred: live Excel link.

@@ -2,15 +2,18 @@
 
 import { layoutCategory } from "./engine/category";
 import { canvasMeasure } from "./engine/measure";
-import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCategory, sampleGantt } from "./engine/spec";
+import { calendarColumns } from "./engine/calendar";
+import { parseDate } from "./engine/dates";
+import { defaultStyle, describe, HIGHLIGHTS, PALETTE_A, sampleCalendar, sampleCategory, sampleGantt } from "./engine/spec";
 import { toSvg } from "./engine/svg";
-import type { CategorySpec, ChartSpec, Frame, GanttSpec, GanttTier, Mode } from "./engine/types";
+import type { CalendarSpec, CategorySpec, ChartSpec, Frame, GanttSpec, GanttTier, Mode } from "./engine/types";
 import { FALLBACK_FONTS, runPilot, type ProbeResult } from "./ppt/probes";
 import {
-  APP_VERSION, drawChart, errText, findSelectedChart, inkFor, readChart, readSlideBackground, redrawChart, TAG,
+  APP_VERSION, detectLineBreak, drawChart, errText, findSelectedChart, inkFor, readChart, readSlideBackground, redrawChart, setLineBreak, TAG,
   type ChartRef,
 } from "./ppt/render";
 import { loadSettings, saveSettings, separators, styleFrom, type Settings } from "./ui/settings";
+import { CalendarSheet } from "./ui/calendarSheet";
 import { GanttSheet } from "./ui/ganttSheet";
 import { Sheet } from "./ui/sheet";
 
@@ -21,7 +24,7 @@ const state: {
   ref: ChartRef | null;
   busy: boolean;
   pending: boolean;
-  calib: { font?: string; ratio?: number } | null;
+  calib: { font?: string; ratio?: number; lineBreak?: string } | null;
   ink: Map<string, ReturnType<typeof inkFor>>;
   probe: { results: ProbeResult[]; actions: Record<string, unknown>[] };
 } = { ref: null, busy: false, pending: false, calib: null, ink: new Map(), probe: { results: [], actions: [] } };
@@ -74,6 +77,9 @@ async function ensureCalibrated(slideId: string) {
     const m = canvasMeasure(`"${out.font}", ${FALLBACK_FONTS}`);
     const ratios = samples.map((t, k) => out.widths[k] / m(t, 12)).filter((r) => r > 0.5 && r < 2);
     state.calib = { font: out.font, ratio: ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1 };
+    const lb = await detectLineBreak(slideId);
+    setLineBreak(lb.sep);
+    state.calib.lineBreak = JSON.stringify(lb.sep);
   } catch {
     /* keep defaults */
   }
@@ -103,10 +109,6 @@ const gsheet = new GanttSheet($("gsheet"), {
   onChange: () => scheduleApply(),
 });
 
-function isGanttOpen() {
-  return state.ref?.stored.spec.type === "gantt";
-}
-
 function ganttFromEditor(): GanttSpec {
   return {
     v: 2,
@@ -135,8 +137,43 @@ function showTiers(t: GanttSpec["tiers"]) {
   tierBoxes().forEach((b) => (b.checked = t !== "auto" && t.includes(b.value as GanttTier)));
 }
 
+const calTierBoxes = () => Array.from(document.querySelectorAll<HTMLInputElement>("#ed-cal input.c-tier"));
+
+function calFromEditor(): CalendarSpec {
+  const auto = $<HTMLInputElement>("c-auto").checked;
+  const t = calTierBoxes().filter((b) => b.checked).map((b) => b.value as GanttTier);
+  return {
+    v: 2,
+    type: "calendar",
+    start: $<HTMLInputElement>("c-start").value,
+    end: $<HTMLInputElement>("c-end").value,
+    tiers: auto || !t.length ? "auto" : t,
+    headerStyle: $<HTMLSelectElement>("c-hstyle").value as CalendarSpec["headerStyle"],
+    headerColor: $<HTMLSelectElement>("c-hcolor").value || undefined,
+    shadeWeekends: $<HTMLInputElement>("c-weekends").checked,
+    showLabels: $<HTMLInputElement>("c-labels").checked,
+    rows: csheet.data(),
+    dateOrder: settings.dateOrder,
+  };
+}
+
+const csheet = new CalendarSheet($("crows"), $("ccells"), {
+  columns: () => calendarColumns(calFromEditor())?.columns ?? [],
+  dateOrder: () => settings.dateOrder,
+  onChange: () => scheduleApply(),
+  onRange: (start, end) => {
+    $<HTMLInputElement>("c-start").value = start;
+    $<HTMLInputElement>("c-end").value = end;
+  },
+});
+
+function openType(): ChartSpec["type"] | null {
+  return state.ref?.stored.spec.type ?? null;
+}
+
 function specFromEditor(): ChartSpec {
-  return isGanttOpen() ? ganttFromEditor() : categoryFromEditor();
+  const t = openType();
+  return t === "gantt" ? ganttFromEditor() : t === "calendar" ? calFromEditor() : categoryFromEditor();
 }
 
 function categoryFromEditor(): CategorySpec {
@@ -165,9 +202,23 @@ function openEditor(ref: ChartRef) {
   state.ref = ref;
   const spec = ref.stored.spec;
   $("editor").hidden = false;
-  $("ed-cat").hidden = spec.type === "gantt";
+  $("ed-cat").hidden = spec.type === "gantt" || spec.type === "calendar";
   $("ed-gantt").hidden = spec.type !== "gantt";
+  $("ed-cal").hidden = spec.type !== "calendar";
   $("ed-title").textContent = describe(spec);
+  if (spec.type === "calendar") {
+    $<HTMLInputElement>("c-start").value = spec.start;
+    $<HTMLInputElement>("c-end").value = spec.end;
+    $<HTMLInputElement>("c-auto").checked = spec.tiers === "auto";
+    calTierBoxes().forEach((b) => (b.checked = spec.tiers !== "auto" && spec.tiers.includes(b.value as GanttTier)));
+    $<HTMLSelectElement>("c-hstyle").value = spec.headerStyle;
+    $<HTMLSelectElement>("c-hcolor").value = spec.headerColor ?? "";
+    $<HTMLInputElement>("c-weekends").checked = spec.shadeWeekends;
+    $<HTMLInputElement>("c-labels").checked = spec.showLabels;
+    csheet.load(spec.rows);
+    status("");
+    return;
+  }
   if (spec.type === "gantt") {
     showTiers(spec.tiers);
     $<HTMLSelectElement>("g-hstyle").value = spec.headerStyle;
@@ -260,7 +311,7 @@ async function insertChart(type: ChartSpec["type"], mode: Mode) {
       return { slideId: slides.items[0].id, frame };
     });
     await ensureCalibrated(target.slideId);
-    const spec: ChartSpec = type === "gantt" ? sampleGantt(settings.dateOrder) : sampleCategory(type, mode);
+    const spec: ChartSpec = type === "gantt" ? sampleGantt(settings.dateOrder) : type === "calendar" ? sampleCalendar(settings.dateOrder) : sampleCategory(type, mode);
     const r = await drawChart(target.slideId, spec, target.frame, await styleForSlide(target.slideId), measure());
     await PowerPoint.run(async (ctx) => {
       ctx.presentation.slides.getItem(target.slideId).setSelectedShapes([r.groupId]);
@@ -269,6 +320,7 @@ async function insertChart(type: ChartSpec["type"], mode: Mode) {
     openEditor({ slideId: target.slideId, groupId: r.groupId, stored: r.stored, current: r.drawn });
     status("Inserted with sample data — paste or type yours below.");
     if (type === "gantt") gsheet.focusCell(1, "label");
+    else if (type === "calendar") { /* data sheet already shown */ }
     else sheet.focusCell(1, 1);
   } catch (e) {
     toast(`Insert failed: ${errText(e)}`, 10000);
@@ -307,13 +359,14 @@ function initSettings() {
   $("set-palette").innerHTML = [...PALETTE_A, ...HIGHLIGHTS].map((c) => `<span class="chip" style="background:${c}" title="${c}"></span>`).join("");
   const onChange = () => {
     // Read the sheet with the old decimal separator before switching formats.
-    const data = state.ref && !isGanttOpen() ? sheet.data() : null;
+    const data = openType() && openType() !== "gantt" && openType() !== "calendar" ? sheet.data() : null;
     settings.fontSize = Number($<HTMLSelectElement>("set-font").value);
     settings.numberFormat = $<HTMLSelectElement>("set-num").value as Settings["numberFormat"];
     settings.dateOrder = $<HTMLSelectElement>("set-dates").value as Settings["dateOrder"];
     saveSettings(settings);
-    if (isGanttOpen()) {
-      gsheet.render(); // re-validate dates with the new order
+    if (openType() === "gantt" || openType() === "calendar") {
+      if (openType() === "gantt") gsheet.render(); // re-validate dates with the new order
+      else csheet.renderCells();
       scheduleApply(0);
       return;
     }
@@ -419,6 +472,30 @@ function wire() {
     $<HTMLInputElement>("g-auto").checked = !tierBoxes().some((x) => x.checked);
     scheduleApply(0);
   }));
+  // Calendar controls: date range and tiers change the columns of the text grid.
+  const calRefresh = () => {
+    for (const id of ["c-start", "c-end"]) {
+      const el = $<HTMLInputElement>(id);
+      el.classList.toggle("bad", el.value.trim() !== "" && parseDate(el.value, settings.dateOrder) === null);
+    }
+    csheet.renderCells();
+    scheduleApply();
+  };
+  $("c-start").addEventListener("input", calRefresh);
+  $("c-end").addEventListener("input", calRefresh);
+  for (const id of ["c-hstyle", "c-hcolor", "c-weekends", "c-labels"]) $(id).addEventListener("change", () => scheduleApply(0));
+  $("c-auto").addEventListener("change", () => {
+    if ($<HTMLInputElement>("c-auto").checked) calTierBoxes().forEach((b) => (b.checked = false));
+    else if (!calTierBoxes().some((b) => b.checked)) $<HTMLInputElement>("c-auto").checked = true;
+    csheet.renderCells();
+    scheduleApply(0);
+  });
+  calTierBoxes().forEach((b) => b.addEventListener("change", () => {
+    $<HTMLInputElement>("c-auto").checked = !calTierBoxes().some((x) => x.checked);
+    csheet.renderCells();
+    scheduleApply(0);
+  }));
+  $("c-addrow").addEventListener("click", () => csheet.addRow());
   $("g-add").addEventListener("click", () => gsheet.addRow());
   $("g-del").addEventListener("click", () => { const m = gsheet.deleteRow(); if (m) toast(m); });
   $("g-up").addEventListener("click", () => gsheet.move(-1));

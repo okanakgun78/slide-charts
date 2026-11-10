@@ -83,3 +83,14 @@ table.sheet.gantt select { border: 0; background: transparent; font-size: 12px; 
 table.sheet.gantt tr.header input.name { font-weight: 700; }
 table.sheet input.bad { color: #b3261e; box-shadow: inset 0 -2px 0 #b3261e; }
 table.sheet input:disabled { background: #f6f7f9; }
+
+h3 { font-size: 12px; margin: 10px 0 2px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+input.dt { width: 110px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; }
+input.dt.bad { border-color: #b3261e; color: #b3261e; }
+table.sheet.cal select { border: 0; background: transparent; font-size: 12px; }
+table.sheet.cal input.name { width: 100px; }
+button.mini { border: 0; padding: 2px 4px; font-size: 12px; color: var(--muted); background: transparent; }
+table.sheet.calcells th.dlabel { font-weight: 600; font-size: 11px; white-space: nowrap; padding: 4px 6px; background: #f6f7f9; text-align: left; vertical-align: top; }
+table.sheet.calcells textarea { border: 0; width: 140px; font: inherit; font-size: 12px; padding: 4px 6px; resize: vertical; outline: none; display: block; }
+table.sheet.calcells textarea:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.pad { padding: 8px; }

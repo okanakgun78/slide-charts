@@ -34,8 +34,11 @@ export interface TextPrim {
   size: number;
   color: string;
   bold?: boolean;
+  italic?: boolean;
   /** Let PowerPoint wrap the text inside the box width. */
   wrap?: boolean;
+  /** Inner margin (points) on all sides; 0 when omitted. */
+  inset?: number;
   align: Align;
   valign: VAlign;
   role: string;
@@ -134,7 +137,36 @@ export interface GanttSpec {
   dateOrder: "DMY" | "MDY";
 }
 
-export type ChartSpec = CategorySpec | GanttSpec;
+export interface CalendarRow {
+  /** Shown in an optional label column on the left. */
+  label: string;
+  /** Relative height (1 = one line; the sample's plan row is about 6). */
+  height: number;
+  style: "normal" | "bold" | "italic";
+  /** Cell background, e.g. yellow for a totals row. */
+  fill?: string;
+  align: "top-left" | "center";
+  /** Cell text keyed by the ISO date of the column's first day ("2026-11-02"). Use \n for new lines. */
+  cells: Record<string, string>;
+}
+
+export interface CalendarSpec {
+  v: 2;
+  type: "calendar";
+  /** Date range as typed (inclusive). */
+  start: string;
+  end: string;
+  tiers: GanttTier[] | "auto";
+  headerStyle: "filled" | "plain";
+  headerColor?: string;
+  shadeWeekends: boolean;
+  /** Show row labels in a column on the left. */
+  showLabels: boolean;
+  rows: CalendarRow[];
+  dateOrder: "DMY" | "MDY";
+}
+
+export type ChartSpec = CategorySpec | GanttSpec | CalendarSpec;
 
 export interface Style {
   fontSize: number;

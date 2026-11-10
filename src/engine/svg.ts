@@ -25,15 +25,17 @@ export function toSvg(prims: Prim[], frame: Frame, fontFamily = "Helvetica, Aria
         const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
         return `<polygon points="${cx},${p.y} ${p.x + p.w},${cy} ${cx},${p.y + p.h} ${p.x},${cy}" fill="${p.fill}"${stroke}/>`;
       }
-      const lines = p.wrap ? wrapLines(p.text, p.w, p.size, measure, p.bold) : [p.text];
+      const ins = p.inset ?? 0;
+      const lines = p.text.split("\n").flatMap((l) => (p.wrap ? wrapLines(l, p.w - 2 * ins, p.size, measure, p.bold) : [l]));
       const lh = p.size * 1.2;
       const blockH = lines.length * lh;
-      const tx = p.align === "left" ? p.x : p.align === "right" ? p.x + p.w : p.x + p.w / 2;
+      const tx = p.align === "left" ? p.x + ins : p.align === "right" ? p.x + p.w - ins : p.x + p.w / 2;
       const anchor = p.align === "left" ? "start" : p.align === "right" ? "end" : "middle";
-      const y0 = p.valign === "top" ? p.y : p.valign === "bottom" ? p.y + p.h - blockH : p.y + (p.h - blockH) / 2;
+      const y0 = p.valign === "top" ? p.y + ins : p.valign === "bottom" ? p.y + p.h - ins - blockH : p.y + (p.h - blockH) / 2;
       const weight = p.bold ? ` font-weight="bold"` : "";
+      const italic = p.italic ? ` font-style="italic"` : "";
       return lines
-        .map((t, k) => `<text x="${tx}" y="${y0 + k * lh + p.size * 0.95}" font-size="${p.size}" fill="${p.color}" text-anchor="${anchor}"${weight}>${esc(t)}</text>`)
+        .map((t, k) => `<text x="${tx}" y="${y0 + k * lh + p.size * 0.95}" font-size="${p.size}" fill="${p.color}" text-anchor="${anchor}"${weight}${italic}>${esc(t)}</text>`)
         .join("");
     })
     .join("\n");

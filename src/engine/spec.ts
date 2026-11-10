@@ -1,7 +1,7 @@
 // Chart spec defaults, samples, migration and the house style.
 
 import { fromDay, isoDay, todayDay, toDay, type DateOrder } from "./dates";
-import type { CategorySpec, ChartSpec, GanttSpec, Mode, Style } from "./types";
+import type { CalendarSpec, CategorySpec, ChartSpec, GanttSpec, Mode, Style } from "./types";
 
 /** Option A: navy-to-light-blue ramp (from the template navy), greys after. */
 export const PALETTE_A = ["#003760", "#2E5B85", "#5B82A8", "#8EAAC7", "#BFD0E2", "#7F7F7F", "#BFBFBF"];
@@ -84,6 +84,29 @@ export function sampleGantt(order: DateOrder, today = todayDay()): GanttSpec {
   };
 }
 
+/** This week (Monday to Sunday), structured like the user's sample: plan, an italic row, a yellow totals row. */
+export function sampleCalendar(order: DateOrder, today = todayDay()): CalendarSpec {
+  const monday = today - fromDay(today).wd;
+  const k = (n: number) => isoDay(monday + n);
+  return {
+    v: 2,
+    type: "calendar",
+    start: k(0),
+    end: k(6),
+    tiers: ["month", "day"],
+    headerStyle: "filled",
+    shadeWeekends: false,
+    showLabels: false,
+    dateOrder: order,
+    rows: [
+      { label: "Plan", height: 5, style: "normal", align: "top-left", cells: {
+        [k(0)]: "1. Kick-off\n2. Team set-up", [k(2)]: "1. Workshop:\n• Diagnosis\n• Hypotheses", [k(4)]: "1. Steering committee" } },
+      { label: "Location", height: 1, style: "italic", align: "center", cells: { [k(0)]: "Istanbul", [k(2)]: "Client site", [k(4)]: "Client site" } },
+      { label: "Status", height: 1, style: "bold", align: "center", fill: "#FFFF00", cells: { [k(0)]: "Started", [k(4)]: "Decision" } },
+    ],
+  };
+}
+
 /** Upgrades older stored specs to the current version. */
 export function migrate(raw: unknown): ChartSpec {
   const s = raw as Record<string, unknown>;
@@ -115,6 +138,7 @@ export function isGantt(spec: ChartSpec): spec is GanttSpec {
 /** Human-readable chart name for the panel. */
 export function describe(spec: ChartSpec): string {
   if (spec.type === "gantt") return `Gantt (${spec.rows.length} rows)`;
+  if (spec.type === "calendar") return `Calendar (${spec.rows.length} row${spec.rows.length === 1 ? "" : "s"})`;
   const modes: Record<Mode, string> = { stacked: "stacked", clustered: "clustered", percent: "100%" };
   const t = spec.type === "line" ? "line" : spec.type === "combo" ? `combination (${modes[spec.mode]})` : `${modes[spec.mode]} ${spec.type}`;
   return `${t[0].toUpperCase()}${t.slice(1)} · ${spec.categories.length} categories × ${spec.series.length} series`;

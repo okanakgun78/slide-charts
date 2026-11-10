@@ -107,6 +107,41 @@
       </div>
       <p class="muted">Dates: 15/03/2026, 15 Mar 2026, Mar 2026, Q1 2027 or 2027 all work. Paste from Excel as Label | Start | End | Note into the first Label cell: rows without dates become groups, rows with only a start become milestones.</p>
     </div>
+
+    <div id="ed-cal" hidden>
+      <div class="row opts">
+        <label>From <input id="c-start" class="dt" placeholder="2 Nov 2026" /></label>
+        <label>To <input id="c-end" class="dt" placeholder="8 Nov 2026" /></label>
+      </div>
+      <div class="row opts">
+        <span class="muted">Timeline:</span>
+        <label><input type="checkbox" id="c-auto" /> Auto</label>
+        <label><input type="checkbox" class="c-tier" value="year" /> Year</label>
+        <label><input type="checkbox" class="c-tier" value="quarter" /> Quarter</label>
+        <label><input type="checkbox" class="c-tier" value="month" /> Month</label>
+        <label><input type="checkbox" class="c-tier" value="week" /> Week</label>
+        <label><input type="checkbox" class="c-tier" value="day" /> Day</label>
+      </div>
+      <div class="row opts">
+        <label>Header
+          <select id="c-hstyle"><option value="filled">Filled</option><option value="plain">Plain</option></select>
+        </label>
+        <label>Colour
+          <select id="c-hcolor">
+            <option value="">Navy</option><option value="#2E5B85">Blue</option><option value="#066BB0">Bright blue</option>
+            <option value="#7F7F7F">Grey</option><option value="#CD9700">Gold</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="c-weekends" /> Shade weekends</label>
+        <label><input type="checkbox" id="c-labels" /> Row labels</label>
+      </div>
+      <h3>Rows</h3>
+      <div id="crows" class="sheetwrap"></div>
+      <div class="row tools"><button id="c-addrow">+ Row</button></div>
+      <h3>Text</h3>
+      <div id="ccells" class="sheetwrap"></div>
+      <p class="muted">Type in the cells (Return starts a new line), or paste a calendar from Excel with dates across the top or down the left; line breaks inside Excel cells (Option+Return) are kept.</p>
+    </div>
   </section>
 
   <section id="insert">
@@ -121,6 +156,7 @@
       <button data-type="line" data-mode="stacked" title="Line">⟋ Line</button>
       <button data-type="combo" data-mode="stacked" title="Columns with a line">▥⟋ Combination</button>
       <button data-type="gantt" data-mode="stacked" title="Gantt / timeline">▬ Gantt</button>
+      <button data-type="calendar" data-mode="stacked" title="Calendar / timeline with text">▦ Calendar</button>
     </div>
     <p class="muted">To place a chart exactly, select a shape or placeholder first; the chart takes its position and size.</p>
   </section>

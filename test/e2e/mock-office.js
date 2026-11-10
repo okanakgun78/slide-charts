@@ -69,10 +69,13 @@
   class Font { constructor(ctx, rec) { this.ctx = ctx; this._rec = rec; this._loaded = new Set(); }
     load(p) { return this.ctx.queueLoad(this, p); }
     get name() { return guard(this, "name", "Avenir Next LT Pro"); }
-    set size(v) { this._rec.size = v; } set color(v) { this._rec.color = v; } set bold(v) { this._rec.bold = v; } }
+    set size(v) { this._rec.size = v; } set color(v) { this._rec.color = v; } set bold(v) { this._rec.bold = v; } set italic(v) { this._rec.italic = v; } }
   class TextFrame {
     constructor(ctx, rec) { this.ctx = ctx; this._rec = rec; }
-    set autoSizeSetting(v) { this._rec.tf.autoSize = v; if (v === "AutoSizeShapeToFitText") this._rec.width = this._rec.text.length * 6.6; }
+    set autoSizeSetting(v) {
+      this._rec.tf.autoSize = v;
+      if (v === "AutoSizeShapeToFitText") { const ls = this._rec.text.split("\n"); this._rec.width = Math.max(...ls.map((l) => l.length)) * 6.6; this._rec.height = ls.length * 14.4; }
+    }
     set wordWrap(v) { this._rec.tf.wrap = v; }
     set leftMargin(v) { this._rec.tf.l = v; } set rightMargin(v) { this._rec.tf.r = v; }
     set topMargin(v) { this._rec.tf.t = v; } set bottomMargin(v) { this._rec.tf.b = v; }

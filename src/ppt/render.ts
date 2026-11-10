@@ -5,6 +5,7 @@
 //   diagonal. Zero dimensions are now drawn as LINE_EPS.
 // - Deleting a group failed (GeneralException) or was ignored, so removal tries several strategies.
 
+import { layoutCalendar } from "../engine/calendar";
 import { layoutCategory } from "../engine/category";
 import { luminance, normHex } from "../engine/format";
 import { layoutGantt } from "../engine/gantt";
@@ -12,7 +13,7 @@ import { migrate } from "../engine/spec";
 import type { Align, ChartSpec, Frame, Layout, Measure, Prim, Style, VAlign } from "../engine/types";
 
 export const TAG = "SLIDECHARTS";
-export const APP_VERSION = "0.5.0";
+export const APP_VERSION = "0.6.0";
 /** Thickness used instead of 0 for horizontal/vertical line boxes (points). */
 export const LINE_EPS = 0.01;
 
@@ -27,7 +28,9 @@ export interface StoredChart {
 }
 
 export function layoutChart(spec: ChartSpec, frame: Frame, style: Style, measure: Measure): Layout {
-  return spec.type === "gantt" ? layoutGantt(spec, frame, style, measure) : layoutCategory(spec, frame, style, measure);
+  if (spec.type === "gantt") return layoutGantt(spec, frame, style, measure);
+  if (spec.type === "calendar") return layoutCalendar(spec, frame, style, measure);
+  return layoutCategory(spec, frame, style, measure);
 }
 
 /** Maps the stored layout frame through the move/resize the user applied to the group. */
@@ -71,6 +74,40 @@ export function lineGeometry(x1: number, y1: number, x2: number, y2: number): { 
   return { left: cx - len / 2, top: cy - LINE_EPS / 2, width: len, height: LINE_EPS, rotation: (Math.atan2(dy, dx) * 180) / Math.PI };
 }
 
+/**
+ * Character PowerPoint treats as a new line inside a text box. The API does not document it, so
+ * the panel tests "\n", "\r" and "\v" once per session (detectLineBreak) and sets the one that works.
+ */
+let lineBreak = "\n";
+export function setLineBreak(sep: string) {
+  lineBreak = sep;
+}
+
+/** Finds which separator makes PowerPoint start a new line (temporary off-slide text boxes). */
+export async function detectLineBreak(slideId: string): Promise<{ sep: string; heights: number[] }> {
+  const seps = ["\n", "\r", "\v"];
+  return PowerPoint.run(async (ctx) => {
+    const shapes = ctx.presentation.slides.getItem(slideId).shapes;
+    const mk = (t: string, k: number) => {
+      const b = shapes.addTextBox(t, { left: -2000, top: 100 + k * 60, width: 300, height: 20 });
+      b.textFrame.wordWrap = false;
+      b.textFrame.textRange.font.size = 12;
+      b.textFrame.autoSizeSetting = "AutoSizeShapeToFitText";
+      return b;
+    };
+    const one = mk("Ag", 0);
+    const multi = seps.map((sep, k) => mk(`Ag${sep}Ag`, k + 1));
+    await ctx.sync();
+    [one, ...multi].forEach((b) => b.load("height"));
+    await ctx.sync();
+    const heights = [one, ...multi].map((b) => b.height);
+    [one, ...multi].forEach((b) => b.delete());
+    await ctx.sync();
+    const k = multi.findIndex((b) => b.height > one.height * 1.6);
+    return { sep: k >= 0 ? seps[k] : "\n", heights };
+  });
+}
+
 /** Adds one primitive to the slide (queued; caller syncs). */
 export function addPrim(shapes: PowerPoint.ShapeCollection, p: Prim): PowerPoint.Shape {
   if (p.kind === "rect") {
@@ -105,19 +142,21 @@ export function addPrim(shapes: PowerPoint.ShapeCollection, p: Prim): PowerPoint
     s.name = p.role;
     return s;
   }
-  const s = shapes.addTextBox(p.text, { left: p.x, top: p.y, width: Math.max(p.w, 1), height: Math.max(p.h, 1) });
+  const s = shapes.addTextBox(p.text.replace(/\n/g, lineBreak), { left: p.x, top: p.y, width: Math.max(p.w, 1), height: Math.max(p.h, 1) });
   const tf = s.textFrame;
   tf.autoSizeSetting = "AutoSizeNone";
   tf.wordWrap = !!p.wrap;
-  tf.leftMargin = 0;
-  tf.rightMargin = 0;
-  tf.topMargin = 0;
-  tf.bottomMargin = 0;
+  const m = p.inset ?? 0;
+  tf.leftMargin = m;
+  tf.rightMargin = m;
+  tf.topMargin = m;
+  tf.bottomMargin = m;
   tf.verticalAlignment = V_ALIGN[p.valign];
   const tr = tf.textRange;
   tr.font.size = p.size;
   tr.font.color = p.color;
   tr.font.bold = !!p.bold;
+  if (p.italic) tr.font.italic = true;
   tr.paragraphFormat.horizontalAlignment = H_ALIGN[p.align];
   s.name = p.role;
   return s;

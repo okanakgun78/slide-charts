@@ -262,6 +262,62 @@ try {
   await settle();
   ok("timeline tiers: Month + Day gives the sample's 'November / 02 Mon' header; Plain style switches it off");
 
+  // 20. Calendar: insert this week's sample.
+  await page.evaluate(() => window.__select([]));
+  await settle(300);
+  await page.click('#insert button[data-type="calendar"]');
+  await settle();
+  s = await spec();
+  assert.equal(s.type, "calendar");
+  assert.equal(await page.isVisible("#ed-cal"), true);
+  assert.equal(await page.isVisible("#ed-gantt"), false);
+  assert.equal(await page.locator("#ccells textarea").count(), 7 * 3, "7 days x 3 rows");
+  g = (await charts()).at(-1);
+  assert.ok(g.children.some((k) => k.type === "TextBox" && k.text.includes("\n")), "multi-line cell text kept");
+  assert.ok(g.children.some((k) => k.type === "TextBox" && k.font?.italic), "italic row");
+  ok("insert Calendar: this week, sample rows (plan, italic row, yellow totals row)");
+
+  // 21. Type multi-line text into a cell.
+  await page.fill('#ccells textarea[data-k="0"][data-ci="1"]', "1. Zone 2 run\n2. Stretching");
+  await settle();
+  s = await spec();
+  const k1 = Object.keys(s.rows[0].cells).sort()[0];
+  assert.ok(Object.values(s.rows[0].cells).includes("1. Zone 2 run\n2. Stretching"), `cell text stored: ${JSON.stringify(s.rows[0].cells)} ${k1}`);
+  ok("typing multi-line text into a day cell");
+
+  // 22. Paste a whole calendar from Excel (dates across, quoted multi-line cells).
+  await page.focus('#ccells textarea[data-k="0"][data-ci="0"]');
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", '\t02/11/2026\t03/11/2026\t04/11/2026\r\nPlan\t"1. Rest\n2. Stretching"\t"1. Zone 2 Run: 16.1K"\t1. Rest\r\nTotal\t0.0 km\t16.1 km\t16.1 km\r\n');
+    document.activeElement.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await settle();
+  s = await spec();
+  assert.equal(await page.inputValue("#c-start"), "2026-11-02");
+  assert.equal(await page.inputValue("#c-end"), "2026-11-04");
+  assert.deepEqual(s.rows.map((r) => r.label), ["Plan", "Total"]);
+  assert.equal(s.rows[0].cells["2026-11-02"], "1. Rest\n2. Stretching");
+  assert.equal(s.rows[1].cells["2026-11-04"], "16.1 km");
+  ok("paste an Excel calendar: date range set, rows named, multi-line cells kept");
+
+  // 23. Row styling from the rows table.
+  await page.selectOption('#crows select[data-k="1"][data-f="fill"]', "#FFFF00");
+  await page.selectOption('#crows select[data-k="1"][data-f="style"]', "bold");
+  await settle();
+  s = await spec();
+  assert.equal(s.rows[1].fill, "#FFFF00");
+  assert.equal(s.rows[1].style, "bold");
+  g = (await charts()).at(-1);
+  assert.ok(g.children.some((k) => k.type === "GeometricShape" && k.fill === "#FFFF00"), "yellow row fill drawn");
+  ok("row fill (yellow) and style (bold) apply to the chart");
+
+  // 24. Change the date range by typing.
+  await page.fill("#c-end", "8 Nov 2026");
+  await settle();
+  assert.equal(await page.locator("#ccells textarea").count(), 7 * 2);
+  ok("typing a new end date adds the missing days");
+
   assert.deepEqual(await errors(), [], "no Office.js errors");
   assert.deepEqual(pageErrors, [], "no page errors");
   ok("no Office.js or page errors");
