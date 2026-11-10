@@ -13,10 +13,10 @@ inside your .pptx file (in hidden shape tags) and never leaves your computer.
 
 ## Install on Mac (for testing)
 
-1. In Terminal, run (replace `USERNAME` with the GitHub username):
+1. In Terminal, run:
 
    ```bash
-   mkdir -p ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef && curl -fsSL https://USERNAME.github.io/slide-charts/manifest.xml -o ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef/slide-charts.xml
+   mkdir -p ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef && curl -fsSL https://okanakgun78.github.io/slide-charts/manifest.xml -o ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef/slide-charts.xml
    ```
 
 2. Quit PowerPoint completely (Cmd+Q) and reopen it, then open any presentation.
@@ -29,7 +29,7 @@ To remove: delete the file `slide-charts.xml` from the `wef` folder above and re
 ## Install for good (Microsoft 365 admin)
 
 Microsoft 365 admin center › Settings › Integrated apps › Upload custom apps › Office Add-in ›
-provide the manifest URL `https://USERNAME.github.io/slide-charts/manifest.xml` › assign to yourself.
+provide the manifest URL `https://okanakgun78.github.io/slide-charts/manifest.xml` › assign to yourself.
 
 ## Development
 
